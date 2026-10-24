@@ -1,0 +1,16 @@
+name = "dawaay-push"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+[triggers]
+crons = ["* * * * *"]   # كل دقيقة
+
+[vars]
+ALLOW_ORIGIN = "https://teto550.github.io"
+VAPID_SUBJECT = "mailto:CHANGE_ME@example.com"   # غيّره لإيميلك
+VAPID_PUBLIC = "CHANGE_ME"                       # من gen-vapid.js
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dawaay-push"
+database_id = "CHANGE_ME"                        # من أمر wrangler d1 create

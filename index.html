@@ -93,6 +93,10 @@ const FIREBASE_CONFIG = {
 // مفتاح Gemini المجاني (من aistudio.google.com) لقراءة الروشتات بخط اليد وترجمتها.
 // اتركه فاضي لاستخدام القراءة البسيطة (Tesseract) اللي مبتفهمش الخط اليدوي كويس.
 const GEMINI_KEY = '';
+
+// إشعارات الأدوية في الخلفية (سيرفر Cloudflare مجاني، شوف push/README.md). اتركهم فاضيين لو مش مفعّل.
+const PUSH_URL = '';      // مثال: https://dawaay-push.xxxx.workers.dev
+const VAPID_PUBLIC = '';  // من gen-vapid.js
 const GEMINI_MODEL = 'gemini-flash-latest';
 
 // قاعدة الأدوية: ملف drugs.json (25 ألف دواء مصري [id, عربي, إنجليزي, المادة الفعالة, السعر])
@@ -347,7 +351,7 @@ async function saveCu() {
   if (!o.name || !o.phone || !o.addr || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والتليفون والعنوان والموقع.');
   o.meds.forEach(m => { if (m.rem.on && m.rem.first == 'now') { const F = lsj('dv_fired'); F[m.name + '|' + m.rem.a] = 1; lss('dv_fired', F); } });
   loc = [o.lat, o.lng]; localStorage.setItem('dv_loc', JSON.stringify(loc));
-  localStorage.setItem('dv_cu', (await put('cu', o)).id); editP = false; medOnly = false; cd = null; cv = isNew ? 's' : 'p'; render();
+  localStorage.setItem('dv_cu', (await put('cu', o)).id); await syncPush(o.meds); editP = false; medOnly = false; cd = null; cv = isNew ? 's' : 'p'; render();
 }
 
 // ===== واجهة الصيدلية =====
@@ -548,6 +552,20 @@ let AC = null, beepT = null, curDue = [];
 const unlockAudio = () => { try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if (AC.state == 'suspended') AC.resume(); } catch (e) {} };
 addEventListener('click', unlockAudio);
 const beep = () => { if (!AC) return; const o = AC.createOscillator(), g = AC.createGain(); o.type = 'sine'; o.frequency.value = 880; g.gain.value = .3; o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + .3); };
+const u8 = s => Uint8Array.from(atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+async function syncPush(meds) {
+  if (!PUSH_URL || !VAPID_PUBLIC || !('PushManager' in window) || !('serviceWorker' in navigator) || !('Notification' in window)) return;
+  try {
+    const list = normMeds(meds).filter(m => m.rem && m.rem.on && m.rem.a).map(m => ({ id:(m.d || m.name) + '_' + m.rem.key, name:m.name, a:m.rem.a, every:m.rem.every, days:m.rem.days || 0, last:m.rem.first == 'now' ? m.rem.a : m.rem.a - 1 }));
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      if (!list.length || Notification.permission != 'granted') return;
+      sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:u8(VAPID_PUBLIC) });
+    }
+    await fetch(PUSH_URL + '/sync', { method:'POST', headers:{ 'Content-Type':'text/plain' }, body:JSON.stringify({ sub:sub.toJSON(), reminders:list }) });
+  } catch (e) { console.warn('push sync failed', e); }
+}
 const askNotif = () => { try { if ('Notification' in window && Notification.permission == 'default') Notification.requestPermission(); } catch (e) {} };
 async function notify(list) {
   try {
@@ -630,7 +648,7 @@ function render() {
       fa = { signIn:c.signInWithEmailAndPassword, signUp:c.createUserWithEmailAndPassword, out:c.signOut };
       c.onAuthStateChanged(fs.auth, async u => {
         user = u;
-        if (u) { try { await load(); } catch (e) { alert('خطأ في تحميل البيانات: ' + e.message); } }
+        if (u) { try { await load(); } catch (e) { alert('خطأ في تحميل البيانات: ' + e.message); } if (role == 'p' && me()) syncPush(me().meds); }
         else { role = null; my = null; S = { ph:[], inv:[], res:[], cu:[], bc:[] }; }
         render();
       });
