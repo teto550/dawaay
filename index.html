@@ -55,6 +55,7 @@ small{color:var(--mut)}
 .pw{display:flex;gap:6px;align-items:center}.pw input{flex:1}.eye{padding:9px 10px;font-size:13px}
 .big{width:100%;margin-top:14px;padding:12px;font-size:17px}
 #sm{font-size:13px;margin:4px 0;color:var(--amber)}
+.mini{display:flex;flex-direction:column;font-size:12px;color:var(--mut);flex:1;min-width:80px}
 </style>
 </head>
 <body>
@@ -183,10 +184,11 @@ function card(r, sd) {
   return `<div class="card ph"><div class="row" style="justify-content:space-between"><b>${esc(p.name)}</b><span class="tag ${op?'':'x'}">${op?(p.h24?'24 ساعة':'مفتوحة'):'مقفولة'}</span></div>
   ${sd ? `<div><b>${esc(dn(r.d))}</b></div>` : ''}
   <div class="bar" title="القرب"><i style="width:${w}%"></i></div>
-  <div class="meta"><span><b>${r.km.toFixed(1)}</b> كم</span><span>الكمية: <b>${r.q}</b></span><span>السعر: <b>${r.pr}</b> ج</span></div>
+  <div class="meta"><span><b>${r.km.toFixed(1)}</b> كم</span><span>المتاح: <b>${stockTxt(r)}</b></span><span>سعر العلبة: <b>${r.pr}</b> ج</span>${(r.sp||1)>1?`<span>سعر الشريط: <b>${(r.pr/r.sp).toFixed(1)}</b> ج</span>`:''}</div>
   <small>${esc(p.addr)}</small>
   <div class="acts"><a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener">الاتجاهات</a>
-  <a href="tel:${esc(p.phone)}">اتصل</a><button onclick="reserve('${p.id}','${r.d}')">احجز</button></div></div>`;
+  <a href="tel:${esc(p.phone)}">اتصل</a></div>
+  <div class="row" style="margin-top:8px"><input id="n_${p.id}_${r.d}" type="number" min="1" value="1" style="width:80px" aria-label="العدد">${(r.sp||1)>1?`<select id="u_${p.id}_${r.d}" style="width:auto"><option value="s">شريط</option><option value="b">علبة</option></select>`:'<span>علبة</span>'}<button onclick="reserve('${p.id}','${r.d}')">احجز</button></div></div>`;
 }
 function alts(d) {
   const g = new Set(IG.get(ingKey(d[3])) || []); g.delete(d[0]);
@@ -245,12 +247,15 @@ function pharm() {
   <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
   <div id="rd" style="width:100%" onclick="stopCam()"></div><div id="sm"></div>
   <input id="dq" placeholder="ابحث عن الدواء بالاسم (عربي أو إنجليزي)" oninput="dsearch(this.value)"><div id="dres" class="chips"></div><div id="dsel" class="muted"></div>
-  <div class="row"><input id="qq" type="number" min="0" placeholder="الكمية"><input id="pr" type="number" min="0" step="0.5" placeholder="السعر"></div>
+  <div class="row"><label class="mini">عدد العلب<input id="qq" type="number" min="0" inputmode="numeric"></label><label class="mini">شرايط في العلبة<input id="sp" type="number" min="1" value="1" inputmode="numeric"></label></div>
+  <div class="row"><label class="mini">شرايط زيادة (اختياري)<input id="ls" type="number" min="0" inputmode="numeric"></label><label class="mini">سعر العلبة (ج)<input id="pr" type="number" min="0" step="0.5" inputmode="decimal"></label></div>
+  <small>لو الدواء مش شرايط (شراب أو حقن...) سيب "شرايط في العلبة" = 1.</small>
   <button onclick="addInv()">حفظ</button></div>
   <h3>المخزون (${inv.length})</h3>
-  ${inv.map(i => `<div class="card row"><span style="flex:1">${esc(dn(i.d))}</span><input style="width:80px" type="number" min="0" value="${i.q}" onchange="upd('${i.id}','q',this.value)" aria-label="الكمية"><input style="width:90px" type="number" min="0" step="0.5" value="${i.pr}" onchange="upd('${i.id}','pr',this.value)" aria-label="السعر"></div>`).join('') || '<p class="muted">لسه مفيش أدوية. ضيف أول دواء من فوق.</p>'}
+  ${inv.map(i => { const sp = i.sp || 1, k = i.id; return `<div class="card"><b>${esc(dn(i.d))}</b><div class="meta"><span>المتاح: <b>${stockTxt(i)}</b></span></div>
+    <div class="row" style="flex-wrap:wrap"><label class="mini">علب<input id="b_${k}" type="number" min="0" value="${Math.floor(i.q / sp)}" onchange="upd2('${k}')"></label><label class="mini">شرايط زيادة<input id="l_${k}" type="number" min="0" value="${i.q % sp}" onchange="upd2('${k}')"></label><label class="mini">شرايط/علبة<input id="s_${k}" type="number" min="1" value="${sp}" onchange="upd2('${k}')"></label><label class="mini">سعر العلبة<input type="number" min="0" step="0.5" value="${i.pr}" onchange="upd('${k}','pr',this.value)"></label></div></div>`; }).join('') || '<p class="muted">لسه مفيش أدوية. ضيف أول دواء من فوق.</p>'}
   <h3>طلبات الحجز (${rs.length})</h3>
-  ${rs.map(r => `<div class="card row" style="justify-content:space-between"><span>${esc(dn(r.d))} — ${esc(r.n)} <small>${esc(r.t)}</small></span>${r.s=='pending'?`<button onclick="conf('${r.id}')">أكّد</button>`:'<span class="tag">متأكد</span>'}</div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
+  ${rs.map(r => `<div class="card row" style="justify-content:space-between"><span>${esc(dn(r.d))} — ${esc(r.n)} <small>${esc(r.t)}</small><br><small>المطلوب: <b>${resTxt(r)}</b></small></span>${r.s=='pending'?`<button onclick="conf('${r.id}')">أكّد</button>`:'<span class="tag">متأكد</span>'}</div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
 }
 
 // ===== الأحداث =====
@@ -260,12 +265,12 @@ async function reg() {
   my = (await put('ph', o)).id; localStorage.setItem('dv_my', my); render();
 }
 async function addInv() {
-  const d = selD, qv = parseInt($('#qq').value), pr = parseFloat($('#pr').value);
+  const d = selD, sp = Math.max(1, parseInt($('#sp').value) || 1), qv = (parseInt($('#qq').value) || 0) * sp + (parseInt($('#ls').value) || 0), pr = parseFloat($('#pr').value);
   if (!d) return alert('اختار الدواء الأول (اكتب اسمه واختار من النتايج).');
-  if (!(qv >= 0) || !(pr >= 0)) return alert('اكتب كمية وسعر صحيحين.');
+  if ((!$('#qq').value && !$('#ls').value) || !(pr >= 0)) return alert('اكتب عدد العلب (أو الشرايط) وسعر العلبة.');
   const bc = $('#bc').value.trim();
   if (bc) await put('bc', { id:bc, d });
-  await put('inv', { id:my+'_'+d, p:my, d, q:qv, pr }); selD = null; render();
+  await put('inv', { id:my+'_'+d, p:my, d, q:qv, sp, pr }); selD = null; render();
 }
 let selD = null, dt, h5 = null;
 const dsearch = v => { clearTimeout(dt); dt = setTimeout(() => { $('#dres').innerHTML = find(v).map(d => `<span class="chip" onclick="pickD('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
@@ -303,16 +308,31 @@ async function scan() {
   }
 }
 async function upd(id, f, v) { const i = S.inv.find(x => x.id == id); i[f] = +v; await put('inv', i); }
+const stockTxt = i => {
+  const sp = i.sp || 1; if (sp < 2) return i.q + ' علبة';
+  const bx = Math.floor(i.q / sp), ls = i.q % sp;
+  return (bx ? bx + ' علبة' : '') + (bx && ls ? ' + ' : '') + (ls ? ls + ' شريط' : '') + (!bx && !ls ? '0' : '') + ' (' + i.q + ' شريط)';
+};
+const resTxt = r => r.qt ? r.un + (r.ut == 'b' ? ' علبة' : ' شريط') + (r.ut == 'b' && r.qt != r.un ? ' (' + r.qt + ' شريط)' : '') : '1 علبة';
 async function reserve(p, d) {
-  const m = me();
-  await put('res', { p, d, c:user ? user.uid : '', n:m.name, t:m.phone, s:'pending', at:Date.now() });
-  alert('اتبعت طلب الحجز. الصيدلية هتأكده.');
+  const m = me(), k = p + '_' + d, it = S.inv.find(x => x.id == k), sp = it.sp || 1;
+  const n = parseInt(document.getElementById('n_' + k).value) || 0, u = (document.getElementById('u_' + k) || {}).value || 'b';
+  if (n < 1) return alert('اكتب عدد صحيح.');
+  const need = u == 'b' ? n * sp : n;
+  if (need > it.q) return alert('المتاح بس ' + stockTxt(it) + '.');
+  await put('res', { p, d, c:user ? user.uid : '', n:m.name, t:m.phone, qt:need, ut:u, un:n, s:'pending', at:Date.now() });
+  alert('اتبعت طلب الحجز (' + n + (u == 'b' ? ' علبة' : ' شريط') + '). الصيدلية هتأكده.');
 }
 async function conf(id) {
-  const r = S.res.find(x => x.id == id), i = S.inv.find(x => x.id == r.p+'_'+r.d);
+  const r = S.res.find(x => x.id == id), i = S.inv.find(x => x.id == r.p + '_' + r.d), need = r.qt || 1;
+  if (i && i.q < need && !confirm('المخزون (' + stockTxt(i) + ') أقل من المطلوب. تأكّد برضه؟')) return;
   r.s = 'confirmed'; await put('res', r);
-  if (i && i.q > 0) { i.q--; await put('inv', i); }
+  if (i) { i.q = Math.max(0, i.q - need); await put('inv', i); }
   render();
+}
+async function upd2(id) {
+  const g = x => parseInt(document.getElementById(x + '_' + id).value) || 0, i = S.inv.find(x => x.id == id), sp = Math.max(1, g('s'));
+  i.sp = sp; i.q = g('b') * sp + g('l'); await put('inv', i); render();
 }
 function gps(f) {
   if (!navigator.geolocation) return alert('المتصفح مش بيدعم تحديد الموقع.');
