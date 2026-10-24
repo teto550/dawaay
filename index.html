@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>دوائي</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#12302c;--teal:#0e5f57;--mint:#e9f2ee;--card:#fff;--line:#cfdcd7;--mut:#5b756f;--red:#b3261e;--amber:#b45309}
+*{box-sizing:border-box}
+body{margin:0;font-family:Cairo,Tahoma,Arial,sans-serif;background:var(--mint);color:var(--ink);line-height:1.6}
+header{background:var(--teal);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+header h1{margin:0;font-size:26px;font-weight:800}
+header p{margin:0;opacity:.85;font-size:14px}
+.pick{display:block;width:100%;text-align:right;padding:18px;margin:12px 0;border-radius:12px;background:#fff;color:var(--ink);border:2px solid var(--teal);font-size:19px;font-weight:800;white-space:normal}
+.pick small{display:block;font-weight:400;font-size:14px;margin-top:2px}
+.pick:hover{background:var(--teal);color:#fff}.pick:hover small{color:#cfe5e0}
+nav{display:flex;gap:4px}
+nav button{flex:1;max-width:160px;border:0;border-radius:10px 10px 0 0;padding:9px;font:600 15px Cairo,Tahoma;background:#0b4c46;color:#cfe5e0;cursor:pointer}
+nav button.on{background:var(--mint);color:var(--teal)}
+main{max-width:720px;margin:0 auto;padding:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:10px 0}
+.row{display:flex;gap:8px;align-items:center}
+input,select{width:100%;padding:10px;margin:4px 0;border:1px solid var(--line);border-radius:8px;font:15px Cairo,Tahoma;background:#fff;color:var(--ink)}
+input[type=checkbox]{width:auto;margin:0 0 0 6px}input[type=range]{padding:0}
+button{border:0;border-radius:8px;padding:10px 14px;font:600 15px Cairo,Tahoma;background:var(--teal);color:#fff;cursor:pointer;white-space:nowrap}
+button.sec{background:#dbe9e5;color:var(--teal)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #f2a900;outline-offset:1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{padding:5px 12px;border:1px solid var(--teal);border-radius:20px;cursor:pointer;font-size:14px;background:#fff}
+.chip.on{background:var(--teal);color:#fff}
+.ph b{font-size:17px}
+.bar{height:6px;background:#e3ece8;border-radius:3px;margin:8px 0;position:relative}
+.bar i{position:absolute;inset:0 auto 0 0;background:var(--teal);border-radius:3px;direction:ltr}
+.meta{display:flex;flex-wrap:wrap;gap:12px;font-size:14px;color:var(--mut)}
+.meta b{color:var(--ink)}
+.tag{font-size:12px;padding:1px 8px;border-radius:10px;background:#d9f0e4;color:#0a6b3b}
+.tag.x{background:#fde2de;color:var(--red)}
+.acts{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.acts a{padding:8px 12px;border-radius:8px;background:#dbe9e5;color:var(--teal);text-decoration:none;font-size:14px;font-weight:600}
+.muted{color:var(--mut)}
+.demo{background:#fff4d6;border:1px solid #f0d58a;color:#6b4e00;padding:8px 12px;border-radius:8px;font-size:13px}
+h3,h4{margin:14px 0 4px}
+small{color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>دوائي</h1><p>لاقي دواءك في أقرب صيدلية</p></div>
+  <button id="out" class="sec" onclick="logout()" hidden>خروج</button>
+</header>
+<main id="app"></main>
+<script>
+// ===== إعدادات Firebase: سيبها فاضية للتجربة المحلية، أو املاها من Firebase Console =====
+const FIREBASE_CONFIG = { apiKey: "", authDomain: "", projectId: "", appId: "" };
+
+// قاعدة أدوية تجريبية [id, عربي, إنجليزي, المادة الفعالة] - استبدلها ببيانات حقيقية لاحقًا
+const D = [
+['panadol','بانادول','Panadol','paracetamol'],['adol','أدول','Adol','paracetamol'],
+['abimol','أبيمول','Abimol','paracetamol'],['cetal','سيتال','Cetal','paracetamol'],
+['brufen','بروفين','Brufen','ibuprofen'],['epifen','إيبيفين','Epifen','ibuprofen'],
+['cataflam','كتافلام','Cataflam','diclofenac'],['voltaren','فولتارين','Voltaren','diclofenac'],
+['declophen','ديكلوفين','Declophen','diclofenac'],['augmentin','أوجمنتين','Augmentin','amoxicillin+clavulanate'],
+['zithromax','زيثروماكس','Zithromax','azithromycin'],['ciprobay','سيبروباي','Ciprobay','ciprofloxacin'],
+['flagyl','فلاجيل','Flagyl','metronidazole'],['antinal','أنتينال','Antinal','nifuroxazide'],
+['glucophage','جلوكوفاج','Glucophage','metformin'],['cidophage','سيدوفاج','Cidophage','metformin'],
+['amaryl','أماريل','Amaryl','glimepiride'],['concor','كونكور','Concor','bisoprolol'],
+['lipitor','ليبيتور','Lipitor','atorvastatin'],['nexium','نيكسيوم','Nexium','esomeprazole'],
+['controloc','كونترولوك','Controloc','pantoprazole'],['zyrtec','زيرتك','Zyrtec','cetirizine'],
+['ventolin','فنتولين','Ventolin','salbutamol'],['congestal','كونجستال','Congestal','paracetamol+pseudoephedrine+chlorpheniramine'],
+['claritin','كلاريتين','Claritin','loratadine']
+];
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const drug = id => D.find(d => d[0] == id);
+const LS = 'dawaay_v1', CN = { ph:'pharmacies', inv:'inventory', res:'reservations', cu:'customers', bc:'barcodes' };
+let S = { ph:[], inv:[], res:[], cu:[], bc:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 50, openOnly = false;
+let loc = JSON.parse(localStorage.getItem('dv_loc') || '[30.0444,31.2357]');
+let my = localStorage.getItem('dv_my');
+
+// ===== طبقة البيانات: Firestore لو الإعدادات موجودة، وإلا localStorage =====
+function seed() {
+  const P = [['النور',30.0459,31.2243,0],['مصر',30.0626,31.2497,0],['الشفاء',29.9602,31.2569,1],['السلام',30.0131,31.2089,0],['الحياة',30.0511,31.3656,0]];
+  const ph = P.map((p,i) => ({ id:'s'+i, name:'صيدلية '+p[0]+' (تجريبي)', phone:'0100000000'+i, addr:'القاهرة', lat:p[1], lng:p[2], h24:!!p[3], o:'09:00', c:'23:00' }));
+  const inv = [];
+  ph.forEach((p,i) => D.forEach((d,j) => {
+    if (j == 0 || (i*31 + j*17) % 5 == 0) return; // بانادول مش موجود عمدًا لتجربة البدائل
+    inv.push({ id:p.id+'_'+d[0], p:p.id, d:d[0], q:(i*13 + j*7) % 40 + 3, pr:20 + (j*37 + i*5) % 180 });
+  }));
+  return { ph, inv, res:[] };
+}
+async function load() {
+  if (fs) {
+    for (const k of Object.keys(CN)) {
+      const s = await fs.getDocs(fs.collection(fs.db, CN[k]));
+      S[k] = s.docs.map(d => ({ ...d.data(), id:d.id }));
+    }
+  } else {
+    const s = localStorage.getItem(LS);
+    S = { cu:[], bc:[], ...(s ? JSON.parse(s) : seed()) };
+    localStorage.setItem(LS, JSON.stringify(S));
+  }
+}
+async function put(k, o) {
+  if (!o.id) o.id = k + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+  const i = S[k].findIndex(x => x.id == o.id);
+  i < 0 ? S[k].push(o) : (S[k][i] = o);
+  if (fs) await fs.setDoc(fs.doc(fs.db, CN[k], o.id), o);
+  else localStorage.setItem(LS, JSON.stringify(S));
+  return o;
+}
+
+// ===== البحث التقريبي (يتحمل الأخطاء الإملائية) =====
+const norm = s => s.toLowerCase().replace(/[\u064B-\u0652\u0640]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/[^a-z0-9\u0621-\u064A ]/g,'').trim();
+function lev(a, b) {
+  const m = [...Array(b.length+1).keys()];
+  for (let i = 1; i <= a.length; i++) {
+    let p = m[0]; m[0] = i;
+    for (let j = 1; j <= b.length; j++) { const t = m[j]; m[j] = Math.min(m[j]+1, m[j-1]+1, p + (a[i-1] == b[j-1] ? 0 : 1)); p = t; }
+  }
+  return m[b.length];
+}
+const score = (s, d) => Math.max(...[d[1], d[2], d[3]].map(n => {
+  n = norm(n);
+  if (s.length > 1 && n.includes(s)) return 1;
+  return 1 - lev(s, n) / Math.max(s.length, n.length);
+}));
+const hav = (a,b,c,d) => { const r = x => x*Math.PI/180, u = r(c-a), v = r(d-b), h = Math.sin(u/2)**2 + Math.cos(r(a))*Math.cos(r(c))*Math.sin(v/2)**2; return 12742*Math.asin(Math.sqrt(h)); };
+function isOpen(p) {
+  if (p.h24) return true;
+  const n = new Date(), t = n.getHours()*60 + n.getMinutes(), f = s => { const [a,b] = s.split(':'); return a*60 + +b; }, o = f(p.o), c = f(p.c);
+  return o <= c ? t >= o && t < c : t >= o || t < c;
+}
+const avail = id => S.inv.filter(i => i.d == id && i.q > 0).map(i => {
+  const p = S.ph.find(x => x.id == i.p);
+  return p && { ...i, p, km: hav(loc[0], loc[1], p.lat, p.lng) };
+}).filter(x => x && x.km <= rad && (!openOnly || isOpen(x.p))).sort((a,b) => a.km - b.km);
+
+// ===== واجهة المريض =====
+function card(r) {
+  const p = r.p, w = Math.max(4, 100 - r.km / rad * 100), op = isOpen(p);
+  return `<div class="card ph"><div class="row" style="justify-content:space-between"><b>${esc(p.name)}</b><span class="tag ${op?'':'x'}">${op?(p.h24?'24 ساعة':'مفتوحة'):'مقفولة'}</span></div>
+  <div class="bar" title="القرب"><i style="width:${w}%"></i></div>
+  <div class="meta"><span><b>${r.km.toFixed(1)}</b> كم</span><span>الكمية: <b>${r.q}</b></span><span>السعر: <b>${r.pr}</b> ج</span></div>
+  <small>${esc(p.addr)}</small>
+  <div class="acts"><a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener">الاتجاهات</a>
+  <a href="tel:${esc(p.phone)}">اتصل</a><button onclick="reserve('${p.id}','${r.d}')">احجز</button></div></div>`;
+}
+function alts(d) {
+  const a = D.filter(x => x[3] == d[3] && x[0] != d[0]).map(x => [x, avail(x[0])]).filter(x => x[1].length);
+  return a.length
+    ? `<h3>بدائل بنفس المادة الفعالة (${esc(d[3])})</h3>` + a.map(([x,r]) => `<h4>${x[1]} · ${x[2]}</h4>` + r.slice(0,3).map(card).join('')).join('')
+    : `<p class="muted">مفيش بدائل متوفرة في النطاق ده. جرّب تزوّد المسافة.</p>`;
+}
+function search() {
+  const m = q.length > 1 ? D.map(d => [d, score(norm(q), d)]).filter(x => x[1] >= .6).sort((a,b) => b[1]-a[1]).slice(0,5).map(x => x[0]) : [];
+  if (!m.length) sel = null; else if (!m.find(d => d[0] == sel)) sel = m[0][0];
+  let h = `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;render()}">
+  <button class="sec" onclick="mic()" aria-label="بحث صوتي">🎤</button><button onclick="q=$('#q').value;render()">بحث</button></div>
+  <label>المسافة: <b id="rv">${rad}</b> كم<input type="range" min="1" max="200" value="${rad}" oninput="rad=+this.value;$('#rv').textContent=rad" onchange="render()"></label>
+  <label><input type="checkbox" ${openOnly?'checked':''} onchange="openOnly=this.checked;render()">المفتوحة الآن بس</label>
+  <div class="row" style="justify-content:space-between"><small>موقعك: ${loc.map(x => x.toFixed(3)).join('، ')}</small><button class="sec" onclick="gps()">حدد موقعي</button></div></div>`;
+  if (q && !m.length) h += `<p class="muted">مفيش دواء بالاسم ده في القاعدة.</p>`;
+  if (m.length) {
+    h += `<div class="chips">${m.map(d => `<span class="chip ${d[0]==sel?'on':''}" onclick="sel='${d[0]}';render()">${d[1]} · ${d[2]}</span>`).join('')}</div>`;
+    const d = drug(sel), r = avail(d[0]);
+    h += r.length ? r.map(card).join('') : `<div class="card"><b>${d[1]}</b> مش متوفر في نطاق ${rad} كم.</div>` + alts(d);
+  }
+  return h;
+}
+
+// ===== تسجيل العميل وبياناته =====
+let cv = 's';
+const me = () => S.cu.find(x => x.id == localStorage.getItem('dv_cu'));
+const custForm = c => `<div class="card"><input id="n" placeholder="الاسم" value="${esc(c?.name)}"><input id="ph" type="tel" placeholder="رقم التليفون" value="${esc(c?.phone)}"><input id="ad" placeholder="العنوان" value="${esc(c?.addr)}">
+  <div class="row"><input id="la" placeholder="خط العرض" value="${c?.lat ?? loc[0]}"><input id="lo" placeholder="خط الطول" value="${c?.lng ?? loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div>
+  <label>الأدوية اللي بتاخدها (لو بتاخد، افصل بينهم بفاصلة)<input id="md" placeholder="مثال: كونكور، جلوكوفاج" value="${esc((c?.meds || []).join('، '))}"></label>
+  <button onclick="saveCu()">${c ? 'حفظ' : 'تسجيل'}</button></div>`;
+function patient() {
+  if (!me()) return '<h3>بيانات العميل</h3>' + custForm(null);
+  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : '<h3>بياناتي</h3>' + custForm(me()));
+}
+async function saveCu() {
+  const v = i => $('#'+i).value.trim(), o = { ...me(), name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), meds:v('md').split(/[,،\n]/).map(x => x.trim()).filter(Boolean) };
+  if (!o.name || !o.phone || !o.addr || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والتليفون والعنوان والموقع.');
+  loc = [o.lat, o.lng]; localStorage.setItem('dv_loc', JSON.stringify(loc));
+  localStorage.setItem('dv_cu', (await put('cu', o)).id); cv = 's'; render();
+}
+
+// ===== واجهة الصيدلية =====
+function pharm() {
+  const p = S.ph.find(x => x.id == my);
+  if (!p) return `<div class="card"><h3>سجّل صيدليتك</h3>
+  <input id="n" placeholder="اسم الصيدلية"><input id="ph" type="tel" placeholder="رقم الهاتف"><input id="ad" placeholder="العنوان">
+  <div class="row"><input id="la" placeholder="خط العرض" value="${loc[0]}"><input id="lo" placeholder="خط الطول" value="${loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div>
+  <label><input type="checkbox" id="h24">شغالة 24 ساعة</label>
+  <div class="row"><input id="o" type="time" value="09:00"><input id="c" type="time" value="23:00"></div>
+  <button onclick="reg()">تسجيل الصيدلية</button></div>`;
+  const inv = S.inv.filter(i => i.p == p.id), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
+  return `<div class="card"><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div>
+  <div class="card"><h3>أضف أو حدّث دواء</h3>
+  <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
+  <video id="cam" playsinline hidden style="width:100%;border-radius:8px" onclick="stopCam()"></video>
+  <select id="d">${D.map(d => `<option value="${d[0]}">${d[1]} · ${d[2]}</option>`).join('')}</select>
+  <div class="row"><input id="qq" type="number" min="0" placeholder="الكمية"><input id="pr" type="number" min="0" step="0.5" placeholder="السعر"></div>
+  <button onclick="addInv()">حفظ</button></div>
+  <h3>المخزون (${inv.length})</h3>
+  ${inv.map(i => `<div class="card row"><span style="flex:1">${drug(i.d)[1]}</span><input style="width:80px" type="number" min="0" value="${i.q}" onchange="upd('${i.id}','q',this.value)" aria-label="الكمية"><input style="width:90px" type="number" min="0" step="0.5" value="${i.pr}" onchange="upd('${i.id}','pr',this.value)" aria-label="السعر"></div>`).join('') || '<p class="muted">لسه مفيش أدوية. ضيف أول دواء من فوق.</p>'}
+  <h3>طلبات الحجز (${rs.length})</h3>
+  ${rs.map(r => `<div class="card row" style="justify-content:space-between"><span>${drug(r.d)[1]} — ${esc(r.n)} <small>${esc(r.t)}</small></span>${r.s=='pending'?`<button onclick="conf('${r.id}')">أكّد</button>`:'<span class="tag">متأكد</span>'}</div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
+}
+
+// ===== الأحداث =====
+async function reg() {
+  const v = i => $('#'+i).value.trim(), o = { name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), h24:$('#h24').checked, o:v('o'), c:v('c') };
+  if (!o.name || !o.phone || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والهاتف والموقع.');
+  my = (await put('ph', o)).id; localStorage.setItem('dv_my', my); render();
+}
+async function addInv() {
+  const d = $('#d').value, qv = parseInt($('#qq').value), pr = parseFloat($('#pr').value);
+  if (!(qv >= 0) || !(pr >= 0)) return alert('اكتب كمية وسعر صحيحين.');
+  const bc = $('#bc').value.trim();
+  if (bc) await put('bc', { id:bc, d });
+  await put('inv', { id:my+'_'+d, p:my, d, q:qv, pr }); render();
+}
+let cam = null;
+const stopCam = () => { cam?.getTracks().forEach(t => t.stop()); cam = null; const v = $('#cam'); if (v) v.hidden = true; };
+function setBc(c) {
+  $('#bc').value = c; const m = S.bc.find(x => x.id == c);
+  if (m) $('#d').value = m.d; else if (c) alert('باركود جديد. اختار الدواء من القايمة وهنفتكره المرة الجاية.');
+}
+async function scan() {
+  if (!('BarcodeDetector' in window)) return alert('المتصفح مش بيدعم مسح الباركود. اكتب رقمه بإيدك، أو افتح البرنامج من Chrome على الموبايل.');
+  try {
+    cam = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    const v = $('#cam'), det = new BarcodeDetector(); v.srcObject = cam; v.hidden = false; await v.play();
+    const t = setInterval(async () => {
+      if (!cam) return clearInterval(t);
+      try { const r = await det.detect(v); if (r.length) { clearInterval(t); stopCam(); setBc(r[0].rawValue); } } catch (e) {}
+    }, 400);
+  } catch (e) { alert('مقدرتش أفتح الكاميرا. اسمح للمتصفح بالوصول للكاميرا.'); }
+}
+async function upd(id, f, v) { const i = S.inv.find(x => x.id == id); i[f] = +v; await put('inv', i); }
+async function reserve(p, d) {
+  const m = me();
+  await put('res', { p, d, n:m.name, t:m.phone, s:'pending', at:Date.now() });
+  alert('اتبعت طلب الحجز. الصيدلية هتأكده.');
+}
+async function conf(id) {
+  const r = S.res.find(x => x.id == id), i = S.inv.find(x => x.id == r.p+'_'+r.d);
+  r.s = 'confirmed'; await put('res', r);
+  if (i && i.q > 0) { i.q--; await put('inv', i); }
+  render();
+}
+function gps(f) {
+  if (!navigator.geolocation) return alert('المتصفح مش بيدعم تحديد الموقع.');
+  navigator.geolocation.getCurrentPosition(p => {
+    const a = p.coords.latitude, b = p.coords.longitude;
+    if (f) { $('#la').value = a; $('#lo').value = b; }
+    else { loc = [a, b]; localStorage.setItem('dv_loc', JSON.stringify(loc)); render(); }
+  }, () => alert('مقدرتش أحدد موقعك. اسمح للمتصفح بالوصول للموقع.'));
+}
+function mic() {
+  const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!R) return alert('المتصفح مش بيدعم البحث الصوتي.');
+  const r = new R(); r.lang = 'ar-EG';
+  r.onresult = e => { q = e.results[0][0].transcript; render(); };
+  r.start();
+}
+const pick = r => { role = r; localStorage.setItem('dv_role', r); render(); };
+const logout = () => { role = null; q = ''; localStorage.removeItem('dv_role'); render(); };
+const entry = () => `<h3 style="margin-top:24px">أهلًا بيك، هتسجّل دخولك كـ:</h3>
+  <button class="pick" onclick="pick('p')">عميل<small>دوّر على دواء واعرف أقرب صيدلية فيها</small></button>
+  <button class="pick" onclick="pick('h')">صيدلية<small>سجّل صيدليتك وأدخل أدويتك وكمياتها وأسعارها</small></button>`;
+function render() {
+  $('#app').innerHTML = (fs ? '' : '<div class="demo">وضع تجريبي: البيانات محفوظة في متصفحك. املا FIREBASE_CONFIG لتشغيل قاعدة البيانات الحقيقية.</div>') + (!role ? entry() : role == 'p' ? patient() : pharm());
+  $('#out').hidden = !role;
+}
+(async () => {
+  try {
+    if (FIREBASE_CONFIG.apiKey) {
+      const v = '10.12.2', [a, b] = await Promise.all([import(`https://www.gstatic.com/firebasejs/${v}/firebase-app.js`), import(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`)]);
+      fs = { db:b.getFirestore(a.initializeApp(FIREBASE_CONFIG)), collection:b.collection, getDocs:b.getDocs, setDoc:b.setDoc, doc:b.doc };
+    }
+    await load();
+  } catch (e) { fs = null; alert('فشل الاتصال بـ Firebase، هشتغل بالوضع التجريبي: ' + e.message); await load(); }
+  render();
+})();
+</script>
+</body>
+</html>
