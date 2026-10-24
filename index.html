@@ -42,7 +42,6 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .demo{background:#fff4d6;border:1px solid #f0d58a;color:#6b4e00;padding:8px 12px;border-radius:8px;font-size:13px}
 h3,h4{margin:14px 0 4px}
 small{color:var(--mut)}
-.filebtn{display:inline-block;border-radius:8px;padding:10px 14px;font:600 15px Cairo,Tahoma;cursor:pointer;white-space:nowrap;background:#dbe9e5;color:var(--teal)}
 .auth{max-width:420px;margin:0 auto}
 .hero{text-align:center;padding:18px 0 4px}
 .hero .logo{width:64px;height:64px;margin:0 auto 6px;border-radius:18px;background:var(--teal);display:grid;place-items:center;font-size:32px}
@@ -243,7 +242,7 @@ function pharm() {
   const inv = S.inv.filter(i => i.p == p.id && drug(i.d)), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
   return `<div class="card"><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div>
   <div class="card"><h3>أضف أو حدّث دواء</h3>
-  <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button><label class="filebtn">📁 صورة<input type="file" accept="image/*" capture="environment" hidden onchange="scanFile(this.files[0]);this.value=''"></label></div>
+  <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
   <div id="rd" style="width:100%" onclick="stopCam()"></div><div id="sm"></div>
   <input id="dq" placeholder="ابحث عن الدواء بالاسم (عربي أو إنجليزي)" oninput="dsearch(this.value)"><div id="dres" class="chips"></div><div id="dsel" class="muted"></div>
   <div class="row"><input id="qq" type="number" min="0" placeholder="الكمية"><input id="pr" type="number" min="0" step="0.5" placeholder="السعر"></div>
@@ -292,24 +291,16 @@ async function loadH5() {
 async function stopCam() { if (h5) { try { await h5.stop(); h5.clear(); } catch (e) {} h5 = null; } }
 async function scan() {
   sm('جاري فتح الكاميرا…');
-  if (!await loadH5()) return sm('تعذر تحميل مكتبة الباركود (اتأكد من الإنترنت). جرّب زرار "صورة" أو اكتب الرقم.');
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return sm('المتصفح مش بيسمح بالكاميرا هنا. جرّب زرار "صورة".');
+  if (!await loadH5()) return sm('تعذر تحميل مكتبة الباركود (اتأكد من الإنترنت). اكتب الرقم بإيدك.');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return sm('المتصفح مش بيسمح بالكاميرا هنا. اكتب الرقم بإيدك.');
   await stopCam();
   const ok = async t => { await stopCam(); sm(''); setBc(t); };
   const go = async c => { h5 = new Html5Qrcode('rd', { formatsToSupport:fmts(), experimentalFeatures:{ useBarCodeDetectorIfSupported:true } }); await h5.start(c, { fps:10, qrbox:{ width:250, height:130 } }, ok, () => {}); sm('وجّه الكاميرا على الباركود (اضغط على الصورة للإغلاق).'); };
   try { await go({ facingMode:'environment' }); }
   catch (e) {
     try { const cs = await Html5Qrcode.getCameras(); if (!cs.length) throw e; await go(cs[cs.length - 1].id); }
-    catch (e2) { h5 = null; sm('الكاميرا مش بتفتح (' + ((e2 && (e2.name || e2.message)) || e2) + '). لو الإذن مرفوض: اضغط على القفل جنب الرابط ثم الأذونات ثم الكاميرا ثم سماح، وحدّث الصفحة. أو استخدم زرار "صورة".'); }
+    catch (e2) { h5 = null; sm('الكاميرا مش بتفتح (' + ((e2 && (e2.name || e2.message)) || e2) + '). لو الإذن مرفوض: اضغط على القفل جنب الرابط ثم الأذونات ثم الكاميرا ثم سماح، وحدّث الصفحة.'); }
   }
-}
-async function scanFile(f) {
-  if (!f) return;
-  sm('بقرا الباركود من الصورة…');
-  if (!await loadH5()) return sm('تعذر تحميل مكتبة الباركود. اكتب الرقم بإيدك.');
-  await stopCam();
-  try { const h = new Html5Qrcode('rd', { formatsToSupport:fmts() }); const t = await h.scanFile(f, false); try { h.clear(); } catch (e) {} sm(''); setBc(t); }
-  catch (e) { sm('معرفتش أقرا باركود من الصورة. صوّر من قريب والباركود واضح ومواجه الكاميرا، أو اكتب الرقم.'); }
 }
 async function upd(id, f, v) { const i = S.inv.find(x => x.id == id); i[f] = +v; await put('inv', i); }
 async function reserve(p, d) {
