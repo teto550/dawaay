@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>دوائي</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0e5f57">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
 :root{--ink:#12302c;--teal:#0e5f57;--mint:#e9f2ee;--card:#fff;--line:#cfdcd7;--mut:#5b756f;--red:#b3261e;--amber:#b45309}
@@ -54,7 +57,12 @@ small{color:var(--mut)}
 .rc span{display:block;font-size:26px}.rc small{display:block}.rc.on{border-color:var(--teal);background:#e6f3f0}
 .pw{display:flex;gap:6px;align-items:center}.pw input{flex:1}.eye{padding:9px 10px;font-size:13px}
 .big{width:100%;margin-top:14px;padding:12px;font-size:17px}
-#sm{font-size:13px;margin:4px 0;color:var(--amber)}
+#sm,#smq,#vm{font-size:13px;margin:4px 0;color:var(--amber)}
+.filebtn{display:inline-block;border-radius:8px;padding:10px 14px;font:600 15px Cairo,Tahoma;cursor:pointer;white-space:nowrap;background:#dbe9e5;color:var(--teal)}
+body{padding-bottom:70px}
+#inst{position:fixed;bottom:0;inset-inline:0;background:#fff;border-top:2px solid var(--teal);padding:10px 14px;display:flex;gap:10px;align-items:center;z-index:50;box-shadow:0 -2px 10px #0002}
+#inst[hidden]{display:none}#inst span{flex:1;font-weight:600}
+#inst .x{background:transparent;color:var(--mut);padding:6px 10px;font-size:18px}
 .mini{display:flex;flex-direction:column;font-size:12px;color:var(--mut);flex:1;min-width:80px}
 </style>
 </head>
@@ -64,6 +72,7 @@ small{color:var(--mut)}
   <button id="out" class="sec" onclick="logout()" hidden>خروج</button>
 </header>
 <main id="app"><p class="muted">جاري التحميل…</p></main>
+<div id="inst" hidden><span>📲 ثبّت دوائي على موبايلك</span><button onclick="install()">تثبيت</button><button class="x" onclick="$('#inst').hidden=true" aria-label="إغلاق">✕</button></div>
 <script>
 // ===== إعدادات Firebase: سيبها فاضية للتجربة المحلية، أو املاها من Firebase Console =====
 const FIREBASE_CONFIG = {
@@ -77,8 +86,9 @@ const FIREBASE_CONFIG = {
 
 // قاعدة الأدوية: ملف drugs.json (25 ألف دواء مصري [id, عربي, إنجليزي, المادة الفعالة, السعر])
 // المصدر: karem505/egyptian-drug-database (ترخيص CC0)
-let D = [], NN = [], TK = [];
+let D = [], NN = [], TK = [], VOC = new Map(), VOCK = [];
 const DM = new Map(), IG = new Map(), BCS = new Map();
+const STOP = new Set('mg gm ml tab tabs tablet tablets capsule capsules cap caps syrup film coated each contains contain store below keep children reach dose daily usage use cream gel drops oral solution injection vial amp ampoule suspension sugar free price egp made egypt manufactured batch exp mfg date pharma pharmaceutical pharmaceuticals company ltd and the for with extra forte plus new junior kids baby adult max ultra advance rapid fast super active compound double strong mega one pro original اكسترا فورت بلس جونيور ادفانس كيدز'.split(' '));
 const bcn = c => String(c).replace(/^0+/, '');
 const ingKey = s => (s || '').toUpperCase().replace(/\([^)]*\)/g, '').split('+').map(x => x.trim()).filter(Boolean).sort().join('+');
 async function loadDrugs() {
@@ -86,7 +96,10 @@ async function loadDrugs() {
   D.forEach(d => {
     DM.set(d[0], d); const n1 = norm(d[1]), n2 = norm(d[2]); NN.push([n1, n2, norm(d[3])]); TK.push([n1.split(' '), n2.split(' ')]);
     const k = ingKey(d[3]); if (k) { if (!IG.has(k)) IG.set(k, []); IG.get(k).push(d[0]); }
+    const add = t => { if (t && t.length >= 3 && !/^\d+$/.test(t) && !STOP.has(t)) VOC.set(t, (VOC.get(t) || 0) + 1); };
+    add(TK[TK.length-1][0][0]); add(TK[TK.length-1][1][0]);
   });
+  VOCK = [...VOC.keys()];
   try { const b = await (await fetch('barcodes.json')).json(); for (const c in b) BCS.set(bcn(c), b[c]); } catch (e) {}
 }
 
@@ -164,7 +177,8 @@ function find(raw) {
     if (sc < 1 && NN[i][2].includes(s)) sc = Math.max(sc, .9);
     if (sc >= .7) res.push([i, sc]);
   }
-  return res.sort((x, y) => y[1] - x[1] || D[x[0]][2].length - D[y[0]][2].length).slice(0, 8).map(x => D[x[0]]);
+  const pop = i => Math.max(VOC.get(TK[i][0][0]) || 0, VOC.get(TK[i][1][0]) || 0);
+  return res.sort((x, y) => y[1] - x[1] || pop(y[0]) - pop(x[0]) || D[x[0]][2].length - D[y[0]][2].length).slice(0, 8).map(x => D[x[0]]);
 }
 const hav = (a,b,c,d) => { const r = x => x*Math.PI/180, u = r(c-a), v = r(d-b), h = Math.sin(u/2)**2 + Math.cos(r(a))*Math.cos(r(c))*Math.sin(v/2)**2; return 12742*Math.asin(Math.sqrt(h)); };
 function isOpen(p) {
@@ -198,13 +212,17 @@ function alts(d) {
     : `<p class="muted">مفيش بدائل متوفرة في النطاق ده. جرّب تزوّد المسافة.</p>`;
 }
 function search() {
-  const m = find(q);
+  let m = find(q);
+  if (pin && drug(pin)) { m = [drug(pin), ...m.filter(x => x[0] != pin)].slice(0, 8); sel = pin; }
   if (!m.length) sel = null; else if (!m.find(d => d[0] == sel)) sel = m[0][0];
-  let h = `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;refresh()}">
-  <button class="sec" onclick="mic()" aria-label="بحث صوتي">🎤</button><button onclick="q=$('#q').value;refresh()">بحث</button></div>
+  let h = `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;pin=null;ocrC=[];refresh()}">
+  <button onclick="q=$('#q').value;pin=null;ocrC=[];refresh()">بحث</button></div>
+  <div class="row" style="margin-top:6px;flex-wrap:wrap"><button class="sec" onclick="mic()">🎤 صوت</button><button class="sec" onclick="togLang()">🌐 ${vlang=='ar-EG'?'عربي':'English'}</button><label class="filebtn">📷 علبة / شريط / روشتة<input type="file" accept="image/*" capture="environment" hidden onchange="ocr(this.files[0]);this.value=''"></label><button class="sec" onclick="scan('c')">▥ باركود</button></div>
+  <div id="vm"></div><div id="rdq" style="width:100%" onclick="stopCam()"></div><div id="smq"></div>
   <label>المسافة: <b id="rv">${rad}</b> كم<input type="range" min="1" max="200" value="${rad}" oninput="rad=+this.value;$('#rv').textContent=rad" onchange="render()"></label>
   <label><input type="checkbox" ${openOnly?'checked':''} onchange="openOnly=this.checked;render()">المفتوحة الآن بس</label>
   <div class="row" style="justify-content:space-between"><small>موقعك: ${loc.map(x => x.toFixed(3)).join('، ')}</small><button class="sec" onclick="gps()">حدد موقعي</button></div></div>`;
+  if (ocrC.length) h += `<div class="card"><b>اللي اتقرا من الصورة:</b><div class="chips">${ocrC.map(c => `<span class="chip ${c.k == norm(q) ? 'on' : ''}" onclick="q='${c.k}';pin=null;refresh()">${esc(c.t)}</span>`).join('')}</div></div>`;
   if (q && !m.length) h += `<p class="muted">مفيش دواء بالاسم ده في القاعدة.</p>`;
   if (m.length) {
     h += `<div class="chips">${m.map(d => `<span class="chip ${d[0]==sel?'on':''}" onclick="sel='${d[0]}';render()">${d[1]} · ${d[2]}</span>`).join('')}</div>`;
@@ -286,7 +304,8 @@ function setBc(c) {
   if (id && drug(id)) { pickD(id); if (!m) $('#dsel').innerHTML += ' <small>(من قاعدة الباركودات، اتأكد إنه نفس العلبة)</small>'; }
   else if (c) alert('باركود جديد. اكتب اسم الدواء واختاره من النتايج وهنفتكره المرة الجاية.');
 }
-const sm = t => { const e = $('#sm'); if (e) e.textContent = t; };
+let tgt = 'h';
+const sm = t => { const e = $(tgt == 'c' ? '#smq' : '#sm'); if (e) e.textContent = t; };
 const fmts = () => { const F = Html5QrcodeSupportedFormats; return [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.QR_CODE]; };
 async function loadH5() {
   if (window.Html5Qrcode) return true;
@@ -294,13 +313,13 @@ async function loadH5() {
   return !!window.Html5Qrcode;
 }
 async function stopCam() { if (h5) { try { await h5.stop(); h5.clear(); } catch (e) {} h5 = null; } }
-async function scan() {
-  sm('جاري فتح الكاميرا…');
+async function scan(t = 'h') {
+  tgt = t; sm('جاري فتح الكاميرا…');
   if (!await loadH5()) return sm('تعذر تحميل مكتبة الباركود (اتأكد من الإنترنت). اكتب الرقم بإيدك.');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return sm('المتصفح مش بيسمح بالكاميرا هنا. اكتب الرقم بإيدك.');
   await stopCam();
-  const ok = async t => { await stopCam(); sm(''); setBc(t); };
-  const go = async c => { h5 = new Html5Qrcode('rd', { formatsToSupport:fmts(), experimentalFeatures:{ useBarCodeDetectorIfSupported:true } }); await h5.start(c, { fps:10, qrbox:{ width:250, height:130 } }, ok, () => {}); sm('وجّه الكاميرا على الباركود (اضغط على الصورة للإغلاق).'); };
+  const ok = async t => { await stopCam(); sm(''); tgt == 'c' ? scanQ(t) : setBc(t); };
+  const go = async c => { h5 = new Html5Qrcode(tgt == 'c' ? 'rdq' : 'rd', { formatsToSupport:fmts(), experimentalFeatures:{ useBarCodeDetectorIfSupported:true } }); await h5.start(c, { fps:10, qrbox:{ width:250, height:130 } }, ok, () => {}); sm('وجّه الكاميرا على الباركود (اضغط على الصورة للإغلاق).'); };
   try { await go({ facingMode:'environment' }); }
   catch (e) {
     try { const cs = await Html5Qrcode.getCameras(); if (!cs.length) throw e; await go(cs[cs.length - 1].id); }
@@ -342,13 +361,70 @@ function gps(f) {
     else { loc = [a, b]; localStorage.setItem('dv_loc', JSON.stringify(loc)); render(); }
   }, () => alert('مقدرتش أحدد موقعك. اسمح للمتصفح بالوصول للموقع.'));
 }
+let vlang = 'ar-EG', pin = null, ocrC = [];
+const vm = t => { const e = $('#vm'); if (e) e.textContent = t; };
+const togLang = () => { vlang = vlang == 'ar-EG' ? 'en-US' : 'ar-EG'; render(); vm('لغة الصوت: ' + (vlang == 'ar-EG' ? 'عربي (قول اسم الدواء)' : 'English')); };
+const FILL = new Set('عايز عاوز عايزه عاوزه محتاج دوا دواء ادويه أدوية ابحث دور دورلي عن لي ليا علبه علبة شريط اسمه اسمها'.split(' ').map(w => norm(w)));
 function mic() {
   const R = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!R) return alert('المتصفح مش بيدعم البحث الصوتي.');
-  const r = new R(); r.lang = 'ar-EG';
-  r.onresult = e => { q = e.results[0][0].transcript; refresh(); };
-  r.start();
+  if (!R) return vm('المتصفح مش بيدعم البحث الصوتي. افتح البرنامج من Chrome.');
+  const r = new R(); r.lang = vlang; r.maxAlternatives = 5; r.interimResults = false;
+  r.onstart = () => vm('🎤 بسمعك… قول اسم الدواء');
+  r.onerror = e => vm({ 'not-allowed':'اسمح للمتصفح بالميكروفون (القفل جنب الرابط ثم الأذونات).', 'service-not-allowed':'اسمح للمتصفح بالميكروفون.', 'no-speech':'مسمعتش حاجة، اضغط 🎤 وحاول تاني.', 'network':'البحث الصوتي محتاج إنترنت.', 'audio-capture':'الميكروفون مش شغال.' }[e.error] || 'خطأ في الصوت: ' + e.error);
+  r.onresult = async e => {
+    const alts = [...e.results[0]].map(a => a.transcript.trim()), cl = t => norm(t).split(' ').filter(w => w && !FILL.has(w)).join(' ');
+    const best = alts.find(a => cl(a) && find(cl(a)).length) || alts[0];
+    q = cl(best) || best; pin = null; ocrC = [];
+    await refresh(); vm('سمعت: «' + best + '»' + (find(q).length ? '' : ' — مالقيتش دواء بالاسم ده، جرّب تاني أو بدّل اللغة 🌐.'));
+  };
+  try { r.start(); } catch (e) { vm('مقدرتش أشغّل الميكروفون: ' + e.message); }
 }
+function ocrCands(text) {
+  const toks = [...new Set(norm(text).split(' ').filter(t => t.length >= 3 && !/^\d+$/.test(t) && !STOP.has(t)))], hits = new Map();
+  for (const t of toks) {
+    let k = VOC.has(t) ? t : null, sc = 1;
+    if (!k) {
+      const mx = t.length >= 8 ? 2 : t.length >= 5 ? 1 : 0; if (!mx) continue; sc = .8; let bd = 99;
+      for (const v of VOCK) { if (Math.abs(v.length - t.length) > mx || VOC.get(v) < 2) continue; const d = lev(t, v, mx); if (d <= mx && d < bd) { bd = d; k = v; } }
+    }
+    if (k) hits.set(k, Math.max(hits.get(k) || 0, sc * (k.length >= 5 ? 1 : .9)));
+  }
+  return [...hits].sort((a, b) => VOC.get(b[0]) - VOC.get(a[0]) || b[1] - a[1] || b[0].length - a[0].length).slice(0, 6).map(([k]) => ({ k, t: k + ' (' + VOC.get(k) + ' صنف)' }));
+}
+async function ocr(f) {
+  if (!f) return;
+  vm('جاري تجهيز قارئ الصور (أول مرة بياخد وقت لأنه بيحمّل اللغات)…');
+  if (!window.Tesseract) await new Promise(ok => { const t = document.createElement('script'); t.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; t.onload = ok; t.onerror = ok; document.head.appendChild(t); });
+  if (!window.Tesseract) return vm('تعذر تحميل قارئ الصور. اتأكد من الإنترنت.');
+  try {
+    const img = await createImageBitmap(f), sc = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const w = await Tesseract.createWorker('eng+ara', 1, { logger: m => vm(m.status == 'recognizing text' ? 'بقرا الصورة… ' + Math.round(m.progress * 100) + '%' : 'تحميل: ' + m.status) });
+    const { data } = await w.recognize(cv); await w.terminate();
+    const txt = data.words && data.words.length ? data.words.filter(x => x.confidence >= 55).map(x => x.text).join(' ') : data.text;
+    ocrC = ocrCands(txt);
+    if (!ocrC.length) return vm('معرفتش أقرا اسم دواء من الصورة. صوّر من قريب وبإضاءة كويسة والاسم واضح، أو اكتب الاسم.');
+    q = ocrC[0].k; pin = null; await refresh();
+    vm('لقيت في الصورة: ' + ocrC.map(c => c.k).join('، ') + (ocrC.length > 1 ? ' — اختار الاسم الصح من فوق.' : ''));
+  } catch (e) { vm('حصل خطأ في قراءة الصورة: ' + (e.message || e)); }
+}
+async function scanQ(c) {
+  const m = S.bc.find(x => bcn(x.id) == bcn(c)), id = (m && m.d) || BCS.get(bcn(c));
+  if (id && drug(id)) { q = drug(id)[2]; pin = id; ocrC = []; await refresh(); vm('اتعرّفنا على العلبة من الباركود.'); }
+  else vm('الباركود ده مش متسجل عندنا. صوّر اسم الدواء (علبة/شريط) أو اكتب الاسم.');
+}
+let ip = null;
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+if (!standalone) $('#inst').hidden = false;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); ip = e; });
+addEventListener('appinstalled', () => { $('#inst').hidden = true; });
+async function install() {
+  if (ip) { ip.prompt(); const c = await ip.userChoice; ip = null; if (c.outcome == 'accepted') $('#inst').hidden = true; return; }
+  alert(/iphone|ipad/i.test(navigator.userAgent)
+    ? 'على الآيفون: اضغط زرار المشاركة (المربع والسهم) ثم "إضافة إلى الشاشة الرئيسية".'
+    : 'على أندرويد: اضغط على النقاط التلاتة (⋮) فوق في كروم ثم "تثبيت التطبيق" أو "إضافة إلى الشاشة الرئيسية".\nولو مش ظاهرة، اقفل الصفحة وافتحها تاني بعد ثواني.');
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 const refresh = async () => { try { if (fs) await load(); } catch (e) {} render(); };
 const pick = async r => { role = r; if (fs && user) await fs.setDoc(fs.doc(fs.db, 'users', user.uid), { role:r }); else localStorage.setItem('dv_role', r); await refresh(); };
 const logout = () => { q = ''; if (fs) return fa.out(fs.auth); role = null; localStorage.removeItem('dv_role'); render(); };
