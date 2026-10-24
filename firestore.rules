@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signed() { return request.auth != null; }
+
+    // نوع الحساب (عميل p / صيدلية h): يتكتب مرة واحدة بس
+    match /users/{uid} {
+      allow read: if signed() && request.auth.uid == uid;
+      allow create: if signed() && request.auth.uid == uid && request.resource.data.role in ['p', 'h'];
+    }
+    // بيانات العميل: لصاحبها بس
+    match /customers/{uid} {
+      allow read, write: if signed() && request.auth.uid == uid;
+    }
+    // الصيدليات: أي مسجّل يقرا، وصاحب الصيدلية بس يكتب
+    match /pharmacies/{uid} {
+      allow read: if signed();
+      allow write: if signed() && request.auth.uid == uid;
+    }
+    // المخزون: أي مسجّل يقرا، وصاحب الصيدلية بس يعدّل مخزونه
+    match /inventory/{id} {
+      allow read: if signed();
+      allow create, update: if signed() && request.resource.data.p == request.auth.uid
+                            && (resource == null || resource.data.p == request.auth.uid);
+      allow delete: if signed() && resource.data.p == request.auth.uid;
+    }
+    // الحجوزات: العميل ينشئ حجزه، والصيدلية تشوف حجوزاتها وتأكدها
+    match /reservations/{id} {
+      allow read: if signed() && (resource.data.p == request.auth.uid || resource.data.c == request.auth.uid);
+      allow create: if signed() && request.resource.data.c == request.auth.uid;
+      allow update: if signed() && resource.data.p == request.auth.uid;
+    }
+    // الباركود: أي مسجّل يقرا ويضيف
+    match /barcodes/{code} {
+      allow read, create, update: if signed();
+    }
+  }
+}
