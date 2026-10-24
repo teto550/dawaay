@@ -61,26 +61,23 @@ const FIREBASE_CONFIG = {
   appId: "1:388101444795:web:e3f5fe4da002dc4e61859e"
 };
 
-// قاعدة أدوية تجريبية [id, عربي, إنجليزي, المادة الفعالة] - استبدلها ببيانات حقيقية لاحقًا
-const D = [
-['panadol','بانادول','Panadol','paracetamol'],['adol','أدول','Adol','paracetamol'],
-['abimol','أبيمول','Abimol','paracetamol'],['cetal','سيتال','Cetal','paracetamol'],
-['brufen','بروفين','Brufen','ibuprofen'],['epifen','إيبيفين','Epifen','ibuprofen'],
-['cataflam','كتافلام','Cataflam','diclofenac'],['voltaren','فولتارين','Voltaren','diclofenac'],
-['declophen','ديكلوفين','Declophen','diclofenac'],['augmentin','أوجمنتين','Augmentin','amoxicillin+clavulanate'],
-['zithromax','زيثروماكس','Zithromax','azithromycin'],['ciprobay','سيبروباي','Ciprobay','ciprofloxacin'],
-['flagyl','فلاجيل','Flagyl','metronidazole'],['antinal','أنتينال','Antinal','nifuroxazide'],
-['glucophage','جلوكوفاج','Glucophage','metformin'],['cidophage','سيدوفاج','Cidophage','metformin'],
-['amaryl','أماريل','Amaryl','glimepiride'],['concor','كونكور','Concor','bisoprolol'],
-['lipitor','ليبيتور','Lipitor','atorvastatin'],['nexium','نيكسيوم','Nexium','esomeprazole'],
-['controloc','كونترولوك','Controloc','pantoprazole'],['zyrtec','زيرتك','Zyrtec','cetirizine'],
-['ventolin','فنتولين','Ventolin','salbutamol'],['congestal','كونجستال','Congestal','paracetamol+pseudoephedrine+chlorpheniramine'],
-['claritin','كلاريتين','Claritin','loratadine']
-];
+// قاعدة الأدوية: ملف drugs.json (25 ألف دواء مصري [id, عربي, إنجليزي, المادة الفعالة, السعر])
+// المصدر: karem505/egyptian-drug-database (ترخيص CC0)
+let D = [], NN = [], TK = [];
+const DM = new Map(), IG = new Map();
+const ingKey = s => (s || '').toUpperCase().replace(/\([^)]*\)/g, '').split('+').map(x => x.trim()).filter(Boolean).sort().join('+');
+async function loadDrugs() {
+  D = await (await fetch('drugs.json')).json();
+  D.forEach(d => {
+    DM.set(d[0], d); const n1 = norm(d[1]), n2 = norm(d[2]); NN.push([n1, n2, norm(d[3])]); TK.push([n1.split(' '), n2.split(' ')]);
+    const k = ingKey(d[3]); if (k) { if (!IG.has(k)) IG.set(k, []); IG.get(k).push(d[0]); }
+  });
+}
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const drug = id => D.find(d => d[0] == id);
+const drug = id => DM.get(id);
+const dn = id => { const d = drug(id); return d ? (d[1] || d[2]) : '؟'; };
 const LS = 'dawaay_v1', CN = { ph:'pharmacies', inv:'inventory', res:'reservations', cu:'customers', bc:'barcodes' };
 let S = { ph:[], inv:[], res:[], cu:[], bc:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 50, openOnly = false;
 let loc = JSON.parse(localStorage.getItem('dv_loc') || '[30.0444,31.2357]');
@@ -92,10 +89,6 @@ function seed() {
   const P = [['النور',30.0459,31.2243,0],['مصر',30.0626,31.2497,0],['الشفاء',29.9602,31.2569,1],['السلام',30.0131,31.2089,0],['الحياة',30.0511,31.3656,0]];
   const ph = P.map((p,i) => ({ id:'s'+i, name:'صيدلية '+p[0]+' (تجريبي)', phone:'0100000000'+i, addr:'القاهرة', lat:p[1], lng:p[2], h24:!!p[3], o:'09:00', c:'23:00' }));
   const inv = [];
-  ph.forEach((p,i) => D.forEach((d,j) => {
-    if (j == 0 || (i*31 + j*17) % 5 == 0) return; // بانادول مش موجود عمدًا لتجربة البدائل
-    inv.push({ id:p.id+'_'+d[0], p:p.id, d:d[0], q:(i*13 + j*7) % 40 + 3, pr:20 + (j*37 + i*5) % 180 });
-  }));
   return { ph, inv, res:[] };
 }
 async function load() {
@@ -130,34 +123,50 @@ async function put(k, o) {
 
 // ===== البحث التقريبي (يتحمل الأخطاء الإملائية) =====
 const norm = s => s.toLowerCase().replace(/[\u064B-\u0652\u0640]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/[^a-z0-9\u0621-\u064A ]/g,'').trim();
-function lev(a, b) {
-  const m = [...Array(b.length+1).keys()];
+function lev(a, b, mx = 99) {
+  const m = [...Array(b.length + 1).keys()];
   for (let i = 1; i <= a.length; i++) {
-    let p = m[0]; m[0] = i;
-    for (let j = 1; j <= b.length; j++) { const t = m[j]; m[j] = Math.min(m[j]+1, m[j-1]+1, p + (a[i-1] == b[j-1] ? 0 : 1)); p = t; }
+    let p = m[0], mn = (m[0] = i);
+    for (let j = 1; j <= b.length; j++) { const t = m[j]; m[j] = Math.min(m[j] + 1, m[j-1] + 1, p + (a[i-1] == b[j-1] ? 0 : 1)); p = t; if (m[j] < mn) mn = m[j]; }
+    if (mn > mx) return mx + 1;
   }
   return m[b.length];
 }
-const score = (s, d) => Math.max(...[d[1], d[2], d[3]].map(n => {
-  n = norm(n);
-  if (s.length > 1 && n.includes(s)) return 1;
-  return 1 - lev(s, n) / Math.max(s.length, n.length);
-}));
+function find(raw) {
+  const s = norm(raw); if (s.length < 2) return [];
+  const k = s.split(' ').length, res = [];
+  for (let i = 0; i < D.length; i++) {
+    let sc = 0;
+    for (let j = 0; j < 2; j++) {
+      const n = NN[i][j]; if (!n) continue;
+      if (n.startsWith(s)) { sc = 1; break; }
+      if (n.includes(s)) { sc = Math.max(sc, .95); continue; }
+      const t = TK[i][j], pre = t.slice(0, k).join(' '), mx = Math.floor(.3 * Math.max(s.length, pre.length));
+      if (Math.abs(pre.length - s.length) <= 4) sc = Math.max(sc, 1 - lev(s, pre, mx) / Math.max(s.length, pre.length));
+      if (k == 1) for (const w of t) if (Math.abs(w.length - s.length) <= 3) sc = Math.max(sc, 1 - lev(s, w, Math.floor(.3 * Math.max(s.length, w.length))) / Math.max(s.length, w.length));
+    }
+    if (sc < 1 && NN[i][2].includes(s)) sc = Math.max(sc, .9);
+    if (sc >= .7) res.push([i, sc]);
+  }
+  return res.sort((x, y) => y[1] - x[1] || D[x[0]][2].length - D[y[0]][2].length).slice(0, 8).map(x => D[x[0]]);
+}
 const hav = (a,b,c,d) => { const r = x => x*Math.PI/180, u = r(c-a), v = r(d-b), h = Math.sin(u/2)**2 + Math.cos(r(a))*Math.cos(r(c))*Math.sin(v/2)**2; return 12742*Math.asin(Math.sqrt(h)); };
 function isOpen(p) {
   if (p.h24) return true;
   const n = new Date(), t = n.getHours()*60 + n.getMinutes(), f = s => { const [a,b] = s.split(':'); return a*60 + +b; }, o = f(p.o), c = f(p.c);
   return o <= c ? t >= o && t < c : t >= o || t < c;
 }
-const avail = id => S.inv.filter(i => i.d == id && i.q > 0).map(i => {
+const availBy = f => S.inv.filter(i => i.q > 0 && f(i.d)).map(i => {
   const p = S.ph.find(x => x.id == i.p);
   return p && { ...i, p, km: hav(loc[0], loc[1], p.lat, p.lng) };
-}).filter(x => x && x.km <= rad && (!openOnly || isOpen(x.p))).sort((a,b) => a.km - b.km);
+}).filter(x => x && x.km <= rad && (!openOnly || isOpen(x.p)))  .sort((a,b) => a.km - b.km);
+const avail = id => availBy(x => x == id);
 
 // ===== واجهة المريض =====
-function card(r) {
+function card(r, sd) {
   const p = r.p, w = Math.max(4, 100 - r.km / rad * 100), op = isOpen(p);
   return `<div class="card ph"><div class="row" style="justify-content:space-between"><b>${esc(p.name)}</b><span class="tag ${op?'':'x'}">${op?(p.h24?'24 ساعة':'مفتوحة'):'مقفولة'}</span></div>
+  ${sd ? `<div><b>${esc(dn(r.d))}</b></div>` : ''}
   <div class="bar" title="القرب"><i style="width:${w}%"></i></div>
   <div class="meta"><span><b>${r.km.toFixed(1)}</b> كم</span><span>الكمية: <b>${r.q}</b></span><span>السعر: <b>${r.pr}</b> ج</span></div>
   <small>${esc(p.addr)}</small>
@@ -165,13 +174,14 @@ function card(r) {
   <a href="tel:${esc(p.phone)}">اتصل</a><button onclick="reserve('${p.id}','${r.d}')">احجز</button></div></div>`;
 }
 function alts(d) {
-  const a = D.filter(x => x[3] == d[3] && x[0] != d[0]).map(x => [x, avail(x[0])]).filter(x => x[1].length);
-  return a.length
-    ? `<h3>بدائل بنفس المادة الفعالة (${esc(d[3])})</h3>` + a.map(([x,r]) => `<h4>${x[1]} · ${x[2]}</h4>` + r.slice(0,3).map(card).join('')).join('')
+  const g = new Set(IG.get(ingKey(d[3])) || []); g.delete(d[0]);
+  const r = g.size ? availBy(x => g.has(x)).slice(0, 8) : [];
+  return r.length
+    ? `<h3>بدائل بنفس المادة الفعالة (${esc(d[3])})</h3>` + r.map(x => card(x, 1)).join('')
     : `<p class="muted">مفيش بدائل متوفرة في النطاق ده. جرّب تزوّد المسافة.</p>`;
 }
 function search() {
-  const m = q.length > 1 ? D.map(d => [d, score(norm(q), d)]).filter(x => x[1] >= .6).sort((a,b) => b[1]-a[1]).slice(0,5).map(x => x[0]) : [];
+  const m = find(q);
   if (!m.length) sel = null; else if (!m.find(d => d[0] == sel)) sel = m[0][0];
   let h = `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;refresh()}">
   <button class="sec" onclick="mic()" aria-label="بحث صوتي">🎤</button><button onclick="q=$('#q').value;refresh()">بحث</button></div>
@@ -214,18 +224,18 @@ function pharm() {
   <label><input type="checkbox" id="h24">شغالة 24 ساعة</label>
   <div class="row"><input id="o" type="time" value="09:00"><input id="c" type="time" value="23:00"></div>
   <button onclick="reg()">تسجيل الصيدلية</button></div>`;
-  const inv = S.inv.filter(i => i.p == p.id), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
+  const inv = S.inv.filter(i => i.p == p.id && drug(i.d)), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
   return `<div class="card"><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div>
   <div class="card"><h3>أضف أو حدّث دواء</h3>
   <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
-  <video id="cam" playsinline hidden style="width:100%;border-radius:8px" onclick="stopCam()"></video>
-  <select id="d">${D.map(d => `<option value="${d[0]}">${d[1]} · ${d[2]}</option>`).join('')}</select>
+  <div id="rd" style="width:100%" onclick="stopCam()"></div>
+  <input id="dq" placeholder="ابحث عن الدواء بالاسم (عربي أو إنجليزي)" oninput="dsearch(this.value)"><div id="dres" class="chips"></div><div id="dsel" class="muted"></div>
   <div class="row"><input id="qq" type="number" min="0" placeholder="الكمية"><input id="pr" type="number" min="0" step="0.5" placeholder="السعر"></div>
   <button onclick="addInv()">حفظ</button></div>
   <h3>المخزون (${inv.length})</h3>
-  ${inv.map(i => `<div class="card row"><span style="flex:1">${drug(i.d)[1]}</span><input style="width:80px" type="number" min="0" value="${i.q}" onchange="upd('${i.id}','q',this.value)" aria-label="الكمية"><input style="width:90px" type="number" min="0" step="0.5" value="${i.pr}" onchange="upd('${i.id}','pr',this.value)" aria-label="السعر"></div>`).join('') || '<p class="muted">لسه مفيش أدوية. ضيف أول دواء من فوق.</p>'}
+  ${inv.map(i => `<div class="card row"><span style="flex:1">${esc(dn(i.d))}</span><input style="width:80px" type="number" min="0" value="${i.q}" onchange="upd('${i.id}','q',this.value)" aria-label="الكمية"><input style="width:90px" type="number" min="0" step="0.5" value="${i.pr}" onchange="upd('${i.id}','pr',this.value)" aria-label="السعر"></div>`).join('') || '<p class="muted">لسه مفيش أدوية. ضيف أول دواء من فوق.</p>'}
   <h3>طلبات الحجز (${rs.length})</h3>
-  ${rs.map(r => `<div class="card row" style="justify-content:space-between"><span>${drug(r.d)[1]} — ${esc(r.n)} <small>${esc(r.t)}</small></span>${r.s=='pending'?`<button onclick="conf('${r.id}')">أكّد</button>`:'<span class="tag">متأكد</span>'}</div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
+  ${rs.map(r => `<div class="card row" style="justify-content:space-between"><span>${esc(dn(r.d))} — ${esc(r.n)} <small>${esc(r.t)}</small></span>${r.s=='pending'?`<button onclick="conf('${r.id}')">أكّد</button>`:'<span class="tag">متأكد</span>'}</div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
 }
 
 // ===== الأحداث =====
@@ -235,28 +245,37 @@ async function reg() {
   my = (await put('ph', o)).id; localStorage.setItem('dv_my', my); render();
 }
 async function addInv() {
-  const d = $('#d').value, qv = parseInt($('#qq').value), pr = parseFloat($('#pr').value);
+  const d = selD, qv = parseInt($('#qq').value), pr = parseFloat($('#pr').value);
+  if (!d) return alert('اختار الدواء الأول (اكتب اسمه واختار من النتايج).');
   if (!(qv >= 0) || !(pr >= 0)) return alert('اكتب كمية وسعر صحيحين.');
   const bc = $('#bc').value.trim();
   if (bc) await put('bc', { id:bc, d });
-  await put('inv', { id:my+'_'+d, p:my, d, q:qv, pr }); render();
+  await put('inv', { id:my+'_'+d, p:my, d, q:qv, pr }); selD = null; render();
 }
-let cam = null;
-const stopCam = () => { cam?.getTracks().forEach(t => t.stop()); cam = null; const v = $('#cam'); if (v) v.hidden = true; };
+let selD = null, dt, h5 = null;
+const dsearch = v => { clearTimeout(dt); dt = setTimeout(() => { $('#dres').innerHTML = find(v).map(d => `<span class="chip" onclick="pickD('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
+function pickD(id) {
+  selD = id; const d = drug(id);
+  $('#dsel').innerHTML = '✔ المختار: <b>' + esc(d[1]) + ' · ' + esc(d[2]) + '</b>';
+  $('#dres').innerHTML = ''; $('#dq').value = '';
+  if (!$('#pr').value && d[4]) $('#pr').value = d[4];
+}
 function setBc(c) {
   $('#bc').value = c; const m = S.bc.find(x => x.id == c);
-  if (m) $('#d').value = m.d; else if (c) alert('باركود جديد. اختار الدواء من القايمة وهنفتكره المرة الجاية.');
+  if (m && drug(m.d)) pickD(m.d); else if (c) alert('باركود جديد. اكتب اسم الدواء واختاره من النتايج وهنفتكره المرة الجاية.');
 }
+async function stopCam() { if (h5) { try { await h5.stop(); h5.clear(); } catch (e) {} h5 = null; } }
 async function scan() {
-  if (!('BarcodeDetector' in window)) return alert('المتصفح مش بيدعم مسح الباركود. اكتب رقمه بإيدك، أو افتح البرنامج من Chrome على الموبايل.');
+  if (!window.Html5Qrcode) await new Promise(ok => {
+    const t = document.createElement('script'); t.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+    t.onload = ok; t.onerror = ok; document.head.appendChild(t);
+  });
+  if (!window.Html5Qrcode) return alert('تعذر تحميل مكتبة الباركود. اتأكد من الإنترنت أو اكتب رقم الباركود بإيدك.');
+  await stopCam();
+  h5 = new Html5Qrcode('rd');
   try {
-    cam = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
-    const v = $('#cam'), det = new BarcodeDetector(); v.srcObject = cam; v.hidden = false; await v.play();
-    const t = setInterval(async () => {
-      if (!cam) return clearInterval(t);
-      try { const r = await det.detect(v); if (r.length) { clearInterval(t); stopCam(); setBc(r[0].rawValue); } } catch (e) {}
-    }, 400);
-  } catch (e) { alert('مقدرتش أفتح الكاميرا. اسمح للمتصفح بالوصول للكاميرا.'); }
+    await h5.start({ facingMode:'environment' }, { fps:10, qrbox:{ width:260, height:140 } }, async t => { await stopCam(); setBc(t); }, () => {});
+  } catch (e) { h5 = null; alert('مقدرتش أفتح الكاميرا: ' + (e.message || e) + '\nاسمح للمتصفح بالوصول للكاميرا (من إعدادات الموقع).'); }
 }
 async function upd(id, f, v) { const i = S.inv.find(x => x.id == id); i[f] = +v; await put('inv', i); }
 async function reserve(p, d) {
@@ -310,6 +329,7 @@ function render() {
 }
 (async () => {
   try {
+    await loadDrugs();
     if (FIREBASE_CONFIG.apiKey) {
       const B = 'https://www.gstatic.com/firebasejs/10.12.2/', [a, b, c] = await Promise.all([import(B + 'firebase-app.js'), import(B + 'firebase-firestore.js'), import(B + 'firebase-auth.js')]);
       const app = a.initializeApp(FIREBASE_CONFIG);
