@@ -64,7 +64,8 @@ const FIREBASE_CONFIG = {
 // قاعدة الأدوية: ملف drugs.json (25 ألف دواء مصري [id, عربي, إنجليزي, المادة الفعالة, السعر])
 // المصدر: karem505/egyptian-drug-database (ترخيص CC0)
 let D = [], NN = [], TK = [];
-const DM = new Map(), IG = new Map();
+const DM = new Map(), IG = new Map(), BCS = new Map();
+const bcn = c => String(c).replace(/^0+/, '');
 const ingKey = s => (s || '').toUpperCase().replace(/\([^)]*\)/g, '').split('+').map(x => x.trim()).filter(Boolean).sort().join('+');
 async function loadDrugs() {
   D = await (await fetch('drugs.json')).json();
@@ -72,6 +73,7 @@ async function loadDrugs() {
     DM.set(d[0], d); const n1 = norm(d[1]), n2 = norm(d[2]); NN.push([n1, n2, norm(d[3])]); TK.push([n1.split(' '), n2.split(' ')]);
     const k = ingKey(d[3]); if (k) { if (!IG.has(k)) IG.set(k, []); IG.get(k).push(d[0]); }
   });
+  try { const b = await (await fetch('barcodes.json')).json(); for (const c in b) BCS.set(bcn(c), b[c]); } catch (e) {}
 }
 
 const $ = s => document.querySelector(s);
@@ -261,8 +263,10 @@ function pickD(id) {
   if (!$('#pr').value && d[4]) $('#pr').value = d[4];
 }
 function setBc(c) {
-  $('#bc').value = c; const m = S.bc.find(x => x.id == c);
-  if (m && drug(m.d)) pickD(m.d); else if (c) alert('باركود جديد. اكتب اسم الدواء واختاره من النتايج وهنفتكره المرة الجاية.');
+  $('#bc').value = c;
+  const m = S.bc.find(x => bcn(x.id) == bcn(c)), id = (m && m.d) || BCS.get(bcn(c));
+  if (id && drug(id)) { pickD(id); if (!m) $('#dsel').innerHTML += ' <small>(من قاعدة الباركودات، اتأكد إنه نفس العلبة)</small>'; }
+  else if (c) alert('باركود جديد. اكتب اسم الدواء واختاره من النتايج وهنفتكره المرة الجاية.');
 }
 async function stopCam() { if (h5) { try { await h5.stop(); h5.clear(); } catch (e) {} h5 = null; } }
 async function scan() {
