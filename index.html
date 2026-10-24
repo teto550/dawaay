@@ -42,6 +42,20 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .demo{background:#fff4d6;border:1px solid #f0d58a;color:#6b4e00;padding:8px 12px;border-radius:8px;font-size:13px}
 h3,h4{margin:14px 0 4px}
 small{color:var(--mut)}
+.filebtn{display:inline-block;border-radius:8px;padding:10px 14px;font:600 15px Cairo,Tahoma;cursor:pointer;white-space:nowrap;background:#dbe9e5;color:var(--teal)}
+.auth{max-width:420px;margin:0 auto}
+.hero{text-align:center;padding:18px 0 4px}
+.hero .logo{width:64px;height:64px;margin:0 auto 6px;border-radius:18px;background:var(--teal);display:grid;place-items:center;font-size:32px}
+.hero h2{margin:0;font-size:28px;font-weight:800}.hero p{margin:4px 0 0;color:var(--mut);font-size:14px}
+.seg{display:grid;grid-template-columns:1fr 1fr;background:#e3ece8;border-radius:10px;padding:4px;gap:4px;margin-bottom:10px}
+.seg button{background:transparent;color:var(--mut)}.seg button.on{background:#fff;color:var(--teal);box-shadow:0 1px 3px #0002}
+.lbl{display:block;font-size:13px;font-weight:600;color:var(--mut);margin:10px 0 2px}
+.roles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.rc{border:2px solid var(--line);border-radius:12px;padding:10px;text-align:center;cursor:pointer}
+.rc span{display:block;font-size:26px}.rc small{display:block}.rc.on{border-color:var(--teal);background:#e6f3f0}
+.pw{display:flex;gap:6px;align-items:center}.pw input{flex:1}.eye{padding:9px 10px;font-size:13px}
+.big{width:100%;margin-top:14px;padding:12px;font-size:17px}
+#sm{font-size:13px;margin:4px 0;color:var(--amber)}
 </style>
 </head>
 <body>
@@ -229,8 +243,8 @@ function pharm() {
   const inv = S.inv.filter(i => i.p == p.id && drug(i.d)), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
   return `<div class="card"><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div>
   <div class="card"><h3>أضف أو حدّث دواء</h3>
-  <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
-  <div id="rd" style="width:100%" onclick="stopCam()"></div>
+  <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button><label class="filebtn">📁 صورة<input type="file" accept="image/*" capture="environment" hidden onchange="scanFile(this.files[0]);this.value=''"></label></div>
+  <div id="rd" style="width:100%" onclick="stopCam()"></div><div id="sm"></div>
   <input id="dq" placeholder="ابحث عن الدواء بالاسم (عربي أو إنجليزي)" oninput="dsearch(this.value)"><div id="dres" class="chips"></div><div id="dsel" class="muted"></div>
   <div class="row"><input id="qq" type="number" min="0" placeholder="الكمية"><input id="pr" type="number" min="0" step="0.5" placeholder="السعر"></div>
   <button onclick="addInv()">حفظ</button></div>
@@ -268,18 +282,34 @@ function setBc(c) {
   if (id && drug(id)) { pickD(id); if (!m) $('#dsel').innerHTML += ' <small>(من قاعدة الباركودات، اتأكد إنه نفس العلبة)</small>'; }
   else if (c) alert('باركود جديد. اكتب اسم الدواء واختاره من النتايج وهنفتكره المرة الجاية.');
 }
+const sm = t => { const e = $('#sm'); if (e) e.textContent = t; };
+const fmts = () => { const F = Html5QrcodeSupportedFormats; return [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.QR_CODE]; };
+async function loadH5() {
+  if (window.Html5Qrcode) return true;
+  await new Promise(ok => { const t = document.createElement('script'); t.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'; t.onload = ok; t.onerror = ok; document.head.appendChild(t); });
+  return !!window.Html5Qrcode;
+}
 async function stopCam() { if (h5) { try { await h5.stop(); h5.clear(); } catch (e) {} h5 = null; } }
 async function scan() {
-  if (!window.Html5Qrcode) await new Promise(ok => {
-    const t = document.createElement('script'); t.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
-    t.onload = ok; t.onerror = ok; document.head.appendChild(t);
-  });
-  if (!window.Html5Qrcode) return alert('تعذر تحميل مكتبة الباركود. اتأكد من الإنترنت أو اكتب رقم الباركود بإيدك.');
+  sm('جاري فتح الكاميرا…');
+  if (!await loadH5()) return sm('تعذر تحميل مكتبة الباركود (اتأكد من الإنترنت). جرّب زرار "صورة" أو اكتب الرقم.');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return sm('المتصفح مش بيسمح بالكاميرا هنا. جرّب زرار "صورة".');
   await stopCam();
-  h5 = new Html5Qrcode('rd');
-  try {
-    await h5.start({ facingMode:'environment' }, { fps:10, qrbox:{ width:260, height:140 } }, async t => { await stopCam(); setBc(t); }, () => {});
-  } catch (e) { h5 = null; alert('مقدرتش أفتح الكاميرا: ' + (e.message || e) + '\nاسمح للمتصفح بالوصول للكاميرا (من إعدادات الموقع).'); }
+  const ok = async t => { await stopCam(); sm(''); setBc(t); };
+  const go = async c => { h5 = new Html5Qrcode('rd', { formatsToSupport:fmts(), experimentalFeatures:{ useBarCodeDetectorIfSupported:true } }); await h5.start(c, { fps:10, qrbox:{ width:250, height:130 } }, ok, () => {}); sm('وجّه الكاميرا على الباركود (اضغط على الصورة للإغلاق).'); };
+  try { await go({ facingMode:'environment' }); }
+  catch (e) {
+    try { const cs = await Html5Qrcode.getCameras(); if (!cs.length) throw e; await go(cs[cs.length - 1].id); }
+    catch (e2) { h5 = null; sm('الكاميرا مش بتفتح (' + ((e2 && (e2.name || e2.message)) || e2) + '). لو الإذن مرفوض: اضغط على القفل جنب الرابط ثم الأذونات ثم الكاميرا ثم سماح، وحدّث الصفحة. أو استخدم زرار "صورة".'); }
+  }
+}
+async function scanFile(f) {
+  if (!f) return;
+  sm('بقرا الباركود من الصورة…');
+  if (!await loadH5()) return sm('تعذر تحميل مكتبة الباركود. اكتب الرقم بإيدك.');
+  await stopCam();
+  try { const h = new Html5Qrcode('rd', { formatsToSupport:fmts() }); const t = await h.scanFile(f, false); try { h.clear(); } catch (e) {} sm(''); setBc(t); }
+  catch (e) { sm('معرفتش أقرا باركود من الصورة. صوّر من قريب والباركود واضح ومواجه الكاميرا، أو اكتب الرقم.'); }
 }
 async function upd(id, f, v) { const i = S.inv.find(x => x.id == id); i[f] = +v; await put('inv', i); }
 async function reserve(p, d) {
@@ -312,16 +342,25 @@ const refresh = async () => { try { if (fs) await load(); } catch (e) {} render(
 const pick = async r => { role = r; if (fs && user) await fs.setDoc(fs.doc(fs.db, 'users', user.uid), { role:r }); else localStorage.setItem('dv_role', r); await refresh(); };
 const logout = () => { q = ''; if (fs) return fa.out(fs.auth); role = null; localStorage.removeItem('dv_role'); render(); };
 const errMsg = c => ({ 'auth/invalid-credential':'الإيميل أو الباسورد غلط', 'auth/wrong-password':'الإيميل أو الباسورد غلط', 'auth/user-not-found':'الإيميل أو الباسورد غلط', 'auth/email-already-in-use':'الإيميل ده مسجل قبل كده', 'auth/weak-password':'الباسورد ضعيف (6 حروف على الأقل)', 'auth/invalid-email':'الإيميل مش مكتوب صح', 'auth/network-request-failed':'مفيش اتصال بالإنترنت' }[c] || 'حصل خطأ: ' + c);
-const authScreen = () => `<div class="card"><div class="row"><button class="${am=='in'?'':'sec'}" onclick="am='in';render()">دخول</button><button class="${am=='up'?'':'sec'}" onclick="am='up';render()">حساب جديد</button></div>
-  ${am == 'up' ? '<label>نوع الحساب<select id="rl"><option value="p">عميل</option><option value="h">صيدلية</option></select></label>' : ''}
-  <input id="em" type="email" placeholder="الإيميل" autocomplete="email"><input id="pw" type="password" placeholder="الباسورد (6 حروف على الأقل)" autocomplete="${am=='in'?'current-password':'new-password'}">
-  <button onclick="doAuth()">${am == 'in' ? 'دخول' : 'إنشاء حساب'}</button></div>`;
+let arole = 'p', showPw = false, ae = '', ap = '';
+const keepAuth = () => { ae = $('#em') ? $('#em').value : ae; ap = $('#pw') ? $('#pw').value : ap; };
+const setAm = v => { keepAuth(); am = v; render(); };
+const setRole = v => { keepAuth(); arole = v; render(); };
+const togglePw = () => { keepAuth(); showPw = !showPw; render(); };
+const authScreen = () => `<div class="auth"><div class="hero"><div class="logo">💊</div><h2>دوائي</h2><p>لاقي دواءك في أقرب صيدلية، وشوف السعر والكمية قبل ما تتحرك</p></div>
+  <div class="card"><div class="seg"><button class="${am=='in'?'on':''}" onclick="setAm('in')">تسجيل الدخول</button><button class="${am=='up'?'on':''}" onclick="setAm('up')">حساب جديد</button></div>
+  ${am == 'up' ? `<div class="lbl">هتسجّل كـ</div><div class="roles">
+    <div class="rc ${arole=='p'?'on':''}" onclick="setRole('p')"><span>🙋</span><b>عميل</b><small>بدوّر على دواء</small></div>
+    <div class="rc ${arole=='h'?'on':''}" onclick="setRole('h')"><span>🏥</span><b>صيدلية</b><small>بعرض أدويتي</small></div></div>` : ''}
+  <label class="lbl" for="em">الإيميل</label><input id="em" type="email" inputmode="email" placeholder="name@example.com" autocomplete="email" value="${esc(ae)}">
+  <label class="lbl" for="pw">الباسورد</label><div class="pw"><input id="pw" type="${showPw?'text':'password'}" placeholder="${am=='up'?'6 حروف على الأقل':'الباسورد'}" autocomplete="${am=='in'?'current-password':'new-password'}" value="${esc(ap)}" onkeydown="if(event.key=='Enter')doAuth()"><button class="sec eye" type="button" onclick="togglePw()">${showPw?'إخفاء':'إظهار'}</button></div>
+  <button class="big" onclick="doAuth()">${am == 'in' ? 'دخول' : 'إنشاء الحساب'}</button></div></div>`;
 async function doAuth() {
   const em = $('#em').value.trim(), pw = $('#pw').value;
   if (!em || !pw) return alert('اكتب الإيميل والباسورد.');
   try {
     if (am == 'in') await fa.signIn(fs.auth, em, pw);
-    else { pend = $('#rl').value; await fa.signUp(fs.auth, em, pw); }
+    else { pend = arole; await fa.signUp(fs.auth, em, pw); }
   } catch (e) { pend = null; alert(errMsg(e.code)); }
 }
 const entry = () => `<h3 style="margin-top:24px">أهلًا بيك، هتسجّل دخولك كـ:</h3>
