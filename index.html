@@ -84,6 +84,11 @@ const FIREBASE_CONFIG = {
   appId: "1:388101444795:web:e3f5fe4da002dc4e61859e"
 };
 
+// مفتاح Gemini المجاني (من aistudio.google.com) لقراءة الروشتات بخط اليد وترجمتها.
+// اتركه فاضي لاستخدام القراءة البسيطة (Tesseract) اللي مبتفهمش الخط اليدوي كويس.
+const GEMINI_KEY = '';
+const GEMINI_MODEL = 'gemini-flash-latest';
+
 // قاعدة الأدوية: ملف drugs.json (25 ألف دواء مصري [id, عربي, إنجليزي, المادة الفعالة, السعر])
 // المصدر: karem505/egyptian-drug-database (ترخيص CC0)
 let D = [], NN = [], TK = [], VOC = new Map(), VOCK = [];
@@ -223,6 +228,7 @@ function search() {
   <label><input type="checkbox" ${openOnly?'checked':''} onchange="openOnly=this.checked;render()">المفتوحة الآن بس</label>
   <div class="row" style="justify-content:space-between"><small>موقعك: ${loc.map(x => x.toFixed(3)).join('، ')}</small><button class="sec" onclick="gps()">حدد موقعي</button></div></div>`;
   if (ocrC.length) h += `<div class="card"><b>اللي اتقرا من الصورة:</b><div class="chips">${ocrC.map(c => `<span class="chip ${c.k == norm(q) ? 'on' : ''}" onclick="q='${c.k}';pin=null;refresh()">${esc(c.t)}</span>`).join('')}</div></div>`;
+  if (ocrC.rx) h += rxCard(ocrC.rx);
   if (q && !m.length) h += `<p class="muted">مفيش دواء بالاسم ده في القاعدة.</p>`;
   if (m.length) {
     h += `<div class="chips">${m.map(d => `<span class="chip ${d[0]==sel?'on':''}" onclick="sel='${d[0]}';render()">${d[1]} · ${d[2]}</span>`).join('')}</div>`;
@@ -391,8 +397,30 @@ function ocrCands(text) {
   }
   return [...hits].sort((a, b) => VOC.get(b[0]) - VOC.get(a[0]) || b[1] - a[1] || b[0].length - a[0].length).slice(0, 6).map(([k]) => ({ k, t: k + ' (' + VOC.get(k) + ' صنف)' }));
 }
+const rxCard = r => `<div class="card"><b>الروشتة / العلبة (قراءة تقريبية)</b><small style="display:block;margin:2px 0 6px">الذكاء الاصطناعي ممكن يغلط في الخط اليدوي. اتأكد من الدكتور أو الصيدلي قبل ما تاخد أي دواء.</small>
+  ${r.map((x, i) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:6px 0"><span><b>${esc(x.name || x.arabic)}</b> ${esc(x.strength || '')}${x.arabic && x.name ? ' · ' + esc(x.arabic) : ''}<br><small>${esc(x.dose || '')}${x.confidence < .6 ? ' · مش واضح' : ''}${x.ok ? '' : ' · مش لاقيه في القاعدة'}</small></span><button onclick="rxGo(${i})">ابحث</button></div>`).join('')}</div>`;
+const rxGo = i => { const keep = ocrC.rx; q = keep[i].q; pin = null; ocrC = []; ocrC.rx = keep; refresh(); };
+async function ocrAI(f) {
+  vm('بقرا الصورة بالذكاء الاصطناعي… (ممكن ياخد ثواني)');
+  try {
+    const img = await createImageBitmap(f), sc = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const b64 = cv.toDataURL('image/jpeg', .85).split(',')[1];
+    const prompt = 'You are helping an Egyptian pharmacy app. The photo shows a medicine box, a medicine strip/blister, or a handwritten doctor prescription (Arabic and/or English; messy handwriting is common). List every medicine you can identify. Use context (typical Egyptian brand and generic names, dosage patterns like "1x3", abbreviations like tab, cap, syr, amp) to decode unclear handwriting; give your best guess and lower the confidence when unsure. Do not invent medicines that are not written in the image. Ignore patient and doctor personal details. Reply with JSON only: {"type":"box|strip|prescription","items":[{"name":"brand or generic name in English letters","arabic":"name in Arabic if written, else empty","strength":"e.g. 500 mg, or empty","dose":"dosing instruction translated to Arabic, or empty","confidence":0.0}]}';
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', { method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key':GEMINI_KEY }, body:JSON.stringify({ contents:[{ parts:[{ text:prompt }, { inline_data:{ mime_type:'image/jpeg', data:b64 } }] }], generationConfig:{ temperature:0, responseMimeType:'application/json' } }) });
+    const j = await r.json();
+    if (!r.ok) return vm(r.status == 429 ? 'الحد المجاني للقراءة بالذكاء الاصطناعي خلص دلوقتي، جرّب بعد شوية.' : 'خطأ من خدمة القراءة: ' + ((j.error && j.error.message) || r.status));
+    const txt = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
+    const items = (JSON.parse(txt.replace(/```json|```/g, '')).items || []).filter(x => x.name || x.arabic).slice(0, 12);
+    if (!items.length) return vm('معرفتش أقرا أدوية من الصورة. صوّر من قريب وبإضاءة كويسة.');
+    items.forEach(x => { const c = ocrCands((x.name || '') + ' ' + (x.arabic || '')); x.q = c.length ? c[0].k : (x.name || x.arabic); x.ok = c.length > 0; });
+    q = items[0].q; pin = null; ocrC = []; ocrC.rx = items; await refresh();
+    vm('قريت ' + items.length + ' دواء. اضغط "ابحث" جنب أي واحد.');
+  } catch (e) { vm('حصل خطأ: ' + (e.message || e)); }
+}
 async function ocr(f) {
   if (!f) return;
+  if (GEMINI_KEY) return ocrAI(f);
   vm('جاري تجهيز قارئ الصور (أول مرة بياخد وقت لأنه بيحمّل اللغات)…');
   if (!window.Tesseract) await new Promise(ok => { const t = document.createElement('script'); t.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; t.onload = ok; t.onerror = ok; document.head.appendChild(t); });
   if (!window.Tesseract) return vm('تعذر تحميل قارئ الصور. اتأكد من الإنترنت.');
