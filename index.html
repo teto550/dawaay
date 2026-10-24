@@ -287,40 +287,48 @@ function setRad(v) {
 }
 
 // ===== تسجيل العميل وبياناته =====
-let cv = 's', editP = false, cd = null, mt;
+let cv = 's', editP = false, medOnly = false, cd = null, mt;
+const MEAL = { any:'مش فارق', before:'قبل الأكل', after:'بعد الأكل', with:'مع الأكل', empty:'على الريق', bed:'قبل النوم' };
+const SL = [['m','الصبح'], ['n','الضهر'], ['a','العصر'], ['e','المغرب'], ['b','قبل النوم']];
+const SLN = Object.fromEntries(SL);
 const UN = { d:'يوم', w:'أسبوع', m:'شهر', y:'سنة' };
 const me = () => S.cu.find(x => x.id == (user ? user.uid : localStorage.getItem('dv_cu')));
 const normMeds = a => (a || []).map(m => typeof m == 'string' ? { name:m } : m);
 const keepC = () => { if (!cd) return; [['name','n'], ['phone','ph'], ['addr','ad'], ['lat','la'], ['lng','lo']].forEach(([k, i]) => { const e = $('#' + i); if (e) cd[k] = e.value; }); };
-const startEdit = () => { const c = me(); cd = { ...c, meds:normMeds(c.meds).map(m => ({ ...m })) }; editP = true; render(); };
-const cancelEdit = () => { editP = false; cd = null; render(); };
+const startEdit = (mo) => { const c = me(); cd = { ...c, meds:normMeds(c.meds).map(m => ({ ...m })) }; editP = true; medOnly = !!mo; render(); if (mo) { const e = $('#mq'); if (e) e.focus(); } };
+const cancelEdit = () => { editP = false; medOnly = false; cd = null; render(); };
 const msearch = v => { clearTimeout(mt); mt = setTimeout(() => { $('#mres').innerHTML = find(v).map(d => `<span class="chip" onclick="madd('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
-const madd = id => { keepC(); const d = drug(id); cd.meds.push({ d:id, name:d[1] || d[2], chronic:false, n:'', u:'m' }); render(); };
+const madd = id => { keepC(); const d = drug(id); cd.meds.push({ d:id, name:d[1] || d[2], chronic:false, n:'', u:'m', tpd:'', meal:'any', slots:[] }); render(); };
 const mdel = i => { keepC(); cd.meds.splice(i, 1); render(); };
+const mslot = (i, k) => { keepC(); const a = cd.meds[i].slots = cd.meds[i].slots || [], j = a.indexOf(k); j < 0 ? a.push(k) : a.splice(j, 1); render(); };
 const mset = (i, k, v) => { cd.meds[i][k] = k == 'n' ? (v === '' ? '' : +v) : v; };
-const custForm = () => { const c = cd; return `<div class="card"><input id="n" placeholder="الاسم" value="${esc(c.name)}"><input id="ph" type="tel" placeholder="رقم التليفون" value="${esc(c.phone)}"><input id="ad" placeholder="العنوان" value="${esc(c.addr)}">
+const medTxt = m => [m.tpd == 'prn' ? 'عند اللزوم' : m.tpd ? m.tpd + ' مرة في اليوم' : '', m.meal && m.meal != 'any' ? MEAL[m.meal] : '', (m.slots || []).map(k => SLN[k]).join('، ')].filter(Boolean).join(' · ');
+const custForm = () => { const c = cd; return `${medOnly ? '<h3>إضافة دواء</h3>' : `<div class="card"><input id="n" placeholder="الاسم" value="${esc(c.name)}"><input id="ph" type="tel" placeholder="رقم التليفون" value="${esc(c.phone)}"><input id="ad" placeholder="العنوان" value="${esc(c.addr)}">
   <div class="row"><input id="la" placeholder="خط العرض" value="${c.lat ?? loc[0]}"><input id="lo" placeholder="خط الطول" value="${c.lng ?? loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div></div>
-  <h4>الأدوية اللي بتاخدها (لو بتاخد)</h4>
+  <h4>الأدوية اللي بتاخدها (لو بتاخد)</h4>`}
   <div class="card"><input id="mq" placeholder="ابحث عن الدواء بالاسم (عربي أو إنجليزي) واختاره" oninput="msearch(this.value)"><div id="mres" class="chips"></div></div>
   ${c.meds.map((m, i) => `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(m.name)}</b><button class="sec" onclick="mdel(${i})">حذف</button></div>
+    <div class="row" style="margin-top:6px"><label class="mini">كام مرة في اليوم<select onchange="mset(${i},'tpd',this.value)">${[['', '—'], ...[1, 2, 3, 4, 5, 6].map(x => [x, x + ' مرة']), ['prn', 'عند اللزوم']].map(([v, l]) => `<option value="${v}" ${String(m.tpd ?? '') == String(v) ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="mini">وقت الأكل<select onchange="mset(${i},'meal',this.value)">${Object.entries(MEAL).map(([k, l]) => `<option value="${k}" ${(m.meal || 'any') == k ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div class="lbl">بتاخده إمتى في اليوم؟</div><div class="chips">${SL.map(([k, l]) => `<span class="chip ${(m.slots || []).includes(k) ? 'on' : ''}" onclick="mslot(${i},'${k}')">${l}</span>`).join('')}</div>
     <label style="display:flex;align-items:center;gap:6px;margin:6px 0"><input type="checkbox" ${m.chronic ? 'checked' : ''} onchange="mset(${i},'chronic',this.checked)"> دواء مزمن</label>
     <div class="row"><span>باخده بقالي</span><input type="number" min="0" value="${m.n ?? ''}" style="width:80px" onchange="mset(${i},'n',this.value)"><select style="width:auto" onchange="mset(${i},'u',this.value)">${Object.entries(UN).map(([k, v]) => `<option value="${k}" ${(m.u || 'm') == k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>`).join('')}
-  <div class="row" style="margin-top:8px"><button onclick="saveCu()">${me() ? 'حفظ التعديلات' : 'تسجيل'}</button>${me() ? '<button class="sec" onclick="cancelEdit()">إلغاء</button>' : ''}</div>`; };
+  <div class="row" style="margin-top:8px"><button onclick="saveCu()">${me() ? 'حفظ' : 'تسجيل'}</button>${me() ? '<button class="sec" onclick="cancelEdit()">إلغاء</button>' : ''}</div>`; };
 const custView = c => `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><button onclick="startEdit()">✏️ تعديل</button></div>
   <div class="meta"><span>📞 ${esc(c.phone)}</span></div><small>${esc(c.addr)}</small></div>
-  <h4>أدويتي</h4>
-  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}<br><small>${m.n ? 'باخده بقالي ' + esc(m.n) + ' ' + UN[m.u || 'm'] : ''}</small></div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط تعديل علشان تضيف.</p>'}`;
+  <div class="row" style="justify-content:space-between;margin-top:12px"><h4 style="margin:0">أدويتي</h4><button onclick="startEdit(1)">➕ إضافة دواء</button></div>
+  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}`;
 function patient() {
   if (!me()) { if (!cd) cd = { meds:[] }; return '<h3>سجّل بياناتك</h3>' + custForm(); }
-  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? '<h3>تعديل بياناتي</h3>' + custForm() : custView(me()));
+  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? (medOnly ? '' : '<h3>تعديل بياناتي</h3>') + custForm() : custView(me()));
 }
 async function saveCu() {
   keepC(); const c = cd, isNew = !me();
   const o = { ...me(), ...(user ? { id:user.uid } : {}), name:(c.name || '').trim(), phone:(c.phone || '').trim(), addr:(c.addr || '').trim(), lat:parseFloat(c.lat), lng:parseFloat(c.lng),
-    meds:c.meds.map(m => ({ d:m.d || '', name:m.name, chronic:!!m.chronic, n:(m.n === '' || m.n == null) ? null : +m.n, u:m.u || 'm' })) };
+    meds:c.meds.map(m => ({ d:m.d || '', name:m.name, chronic:!!m.chronic, n:(m.n === '' || m.n == null) ? null : +m.n, u:m.u || 'm', tpd:(m.tpd === '' || m.tpd == null) ? null : m.tpd == 'prn' ? 'prn' : +m.tpd, meal:m.meal || 'any', slots:m.slots || [] })) };
   if (!o.name || !o.phone || !o.addr || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والتليفون والعنوان والموقع.');
   loc = [o.lat, o.lng]; localStorage.setItem('dv_loc', JSON.stringify(loc));
-  localStorage.setItem('dv_cu', (await put('cu', o)).id); editP = false; cd = null; cv = isNew ? 's' : 'p'; render();
+  localStorage.setItem('dv_cu', (await put('cu', o)).id); editP = false; medOnly = false; cd = null; cv = isNew ? 's' : 'p'; render();
 }
 
 // ===== واجهة الصيدلية =====
