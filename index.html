@@ -45,6 +45,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .demo{background:#fff4d6;border:1px solid #f0d58a;color:#6b4e00;padding:8px 12px;border-radius:8px;font-size:13px}
 h3,h4{margin:14px 0 4px}
 small{color:var(--mut)}
+#map{position:relative;z-index:0}
 .auth{max-width:420px;margin:0 auto}
 .hero{text-align:center;padding:18px 0 4px}
 .hero .logo{width:64px;height:64px;margin:0 auto 6px;border-radius:18px;background:var(--teal);display:grid;place-items:center;font-size:32px}
@@ -113,7 +114,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const drug = id => DM.get(id);
 const dn = id => { const d = drug(id); return d ? (d[1] || d[2]) : '؟'; };
 const LS = 'dawaay_v1', CN = { ph:'pharmacies', inv:'inventory', res:'reservations', cu:'customers', bc:'barcodes' };
-let S = { ph:[], inv:[], res:[], cu:[], bc:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 50, openOnly = false;
+let S = { ph:[], inv:[], res:[], cu:[], bc:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 10, openOnly = true, useRad = false, lastRes = [];
 let loc = JSON.parse(localStorage.getItem('dv_loc') || '[30.0444,31.2357]');
 let my = localStorage.getItem('dv_my');
 let user = null, fa = null, am = 'in', pend = null;
@@ -194,12 +195,12 @@ function isOpen(p) {
 const availBy = f => S.inv.filter(i => i.q > 0 && f(i.d)).map(i => {
   const p = S.ph.find(x => x.id == i.p);
   return p && { ...i, p, km: hav(loc[0], loc[1], p.lat, p.lng) };
-}).filter(x => x && x.km <= rad && (!openOnly || isOpen(x.p)))  .sort((a,b) => a.km - b.km);
+}).filter(x => x && (!useRad || x.km <= rad) && (!openOnly || isOpen(x.p)))  .sort((a,b) => a.km - b.km);
 const avail = id => availBy(x => x == id);
 
 // ===== واجهة المريض =====
 function card(r, sd) {
-  const p = r.p, w = Math.max(4, 100 - r.km / rad * 100), op = isOpen(p);
+  const p = r.p, R = useRad ? rad : 50, w = Math.max(4, 100 - Math.min(r.km, R) / R * 100), op = isOpen(p);
   return `<div class="card ph"><div class="row" style="justify-content:space-between"><b>${esc(p.name)}</b><span class="tag ${op?'':'x'}">${op?(p.h24?'24 ساعة':'مفتوحة'):'مقفولة'}</span></div>
   ${sd ? `<div><b>${esc(dn(r.d))}</b></div>` : ''}
   <div class="bar" title="القرب"><i style="width:${w}%"></i></div>
@@ -214,46 +215,112 @@ function alts(d) {
   const r = g.size ? availBy(x => g.has(x)).slice(0, 8) : [];
   return r.length
     ? `<h3>بدائل بنفس المادة الفعالة (${esc(d[3])})</h3>` + r.map(x => card(x, 1)).join('')
-    : `<p class="muted">مفيش بدائل متوفرة في النطاق ده. جرّب تزوّد المسافة.</p>`;
+    : `<p class="muted">مفيش بدائل متوفرة دلوقتي. جرّب تلغي «المفتوحة دلوقتي بس» أو تكبّر القطر.</p>`;
 }
-function search() {
+function results() {
   let m = find(q);
   if (pin && drug(pin)) { m = [drug(pin), ...m.filter(x => x[0] != pin)].slice(0, 8); sel = pin; }
   if (!m.length) sel = null; else if (!m.find(d => d[0] == sel)) sel = m[0][0];
-  let h = `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;pin=null;ocrC=[];refresh()}">
-  <button onclick="q=$('#q').value;pin=null;ocrC=[];refresh()">بحث</button></div>
-  <div class="row" style="margin-top:6px;flex-wrap:wrap"><button class="sec" onclick="mic()">🎤 صوت</button><button class="sec" onclick="togLang()">🌐 ${vlang=='ar-EG'?'عربي':'English'}</button><label class="filebtn">📷 علبة / شريط / روشتة<input type="file" accept="image/*" capture="environment" hidden onchange="ocr(this.files[0]);this.value=''"></label><button class="sec" onclick="scan('c')">▥ باركود</button></div>
-  <div id="vm"></div><div id="rdq" style="width:100%" onclick="stopCam()"></div><div id="smq"></div>
-  <label>المسافة: <b id="rv">${rad}</b> كم<input type="range" min="1" max="200" value="${rad}" oninput="rad=+this.value;$('#rv').textContent=rad" onchange="render()"></label>
-  <label><input type="checkbox" ${openOnly?'checked':''} onchange="openOnly=this.checked;render()">المفتوحة الآن بس</label>
-  <div class="row" style="justify-content:space-between"><small>موقعك: ${loc.map(x => x.toFixed(3)).join('، ')}</small><button class="sec" onclick="gps()">حدد موقعي</button></div></div>`;
+  lastRes = [];
+  let h = '';
   if (ocrC.length) h += `<div class="card"><b>اللي اتقرا من الصورة:</b><div class="chips">${ocrC.map(c => `<span class="chip ${c.k == norm(q) ? 'on' : ''}" onclick="q='${c.k}';pin=null;refresh()">${esc(c.t)}</span>`).join('')}</div></div>`;
   if (ocrC.rx) h += rxCard(ocrC.rx);
   if (q && !m.length) h += `<p class="muted">مفيش دواء بالاسم ده في القاعدة.</p>`;
   if (m.length) {
-    h += `<div class="chips">${m.map(d => `<span class="chip ${d[0]==sel?'on':''}" onclick="sel='${d[0]}';render()">${d[1]} · ${d[2]}</span>`).join('')}</div>`;
-    const d = drug(sel), r = avail(d[0]);
-    h += r.length ? r.map(card).join('') : `<div class="card"><b>${d[1]}</b> مش متوفر في نطاق ${rad} كم.</div>` + alts(d);
+    h += `<div class="chips">${m.map(d => `<span class="chip ${d[0]==sel?'on':''}" onclick="sel='${d[0]}';updRes()">${d[1]} · ${d[2]}</span>`).join('')}</div>`;
+    const d = drug(sel), r = avail(d[0]).slice(0, 30); lastRes = r;
+    h += r.length ? r.map(card).join('') : `<div class="card"><b>${d[1]}</b> مش متوفر ${useRad ? 'في نطاق ' + rad + ' كم' : openOnly ? 'في أي صيدلية مفتوحة دلوقتي' : 'في أي صيدلية'}.</div>` + alts(d);
   }
   return h;
 }
+const updRes = () => {
+  const e = $('#res'); if (!e) return;
+  const qi = $('#q'); if (qi) qi.value = q;
+  const lc = $('#lc'); if (lc) lc.textContent = 'موقعك: ' + loc.map(x => x.toFixed(3)).join('، ');
+  e.innerHTML = results(); markers();
+};
+function search() {
+  return `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;pin=null;ocrC=[];refresh()}">
+  <button onclick="q=$('#q').value;pin=null;ocrC=[];refresh()">بحث</button></div>
+  <div class="row" style="margin-top:6px;flex-wrap:wrap"><button class="sec" onclick="mic()">🎤 صوت</button><button class="sec" onclick="togLang()">🌐 ${vlang=='ar-EG'?'عربي':'English'}</button><label class="filebtn">📷 علبة / شريط / روشتة<input type="file" accept="image/*" capture="environment" hidden onchange="ocr(this.files[0]);this.value=''"></label><button class="sec" onclick="scan('c')">▥ باركود</button></div>
+  <div id="vm"></div><div id="rdq" style="width:100%" onclick="stopCam()"></div><div id="smq"></div>
+  <label><input type="checkbox" ${openOnly?'checked':''} onchange="openOnly=this.checked;updRes()">الصيدليات المفتوحة دلوقتي بس</label>
+  <label><input type="checkbox" ${useRad?'checked':''} onchange="useRad=this.checked;render()">حدّد قطر البحث حول موقعي (على الخريطة)</label>
+  ${useRad ? `<div id="map" style="height:280px;border-radius:10px;margin:6px 0"></div><label>القطر: <b id="rv">${rad}</b> كم<input type="range" min="1" max="100" value="${rad}" oninput="setRad(+this.value)"></label><small>اسحب الدبوس 📍 أو اضغط على الخريطة لتغيير موقعك.</small>` : ''}
+  <div class="row" style="justify-content:space-between"><small id="lc">موقعك: ${loc.map(x => x.toFixed(3)).join('، ')}</small><button class="sec" onclick="gps()">حدد موقعي</button></div></div>
+  <div id="res">${results()}</div>`;
+}
+
+// ===== الخريطة (Leaflet + OpenStreetMap) =====
+let map = null, circ = null, umk = null, pl = null, rt;
+async function loadLeaflet() {
+  if (window.L) return true;
+  await new Promise(ok => {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(l);
+    const t = document.createElement('script'); t.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js'; t.onload = ok; t.onerror = ok; document.head.appendChild(t);
+  });
+  return !!window.L;
+}
+async function initMap() {
+  const el = $('#map');
+  if (map) { try { map.remove(); } catch (e) {} map = null; }
+  if (!el) return;
+  if (!await loadLeaflet()) { el.innerHTML = '<p class="muted" style="padding:10px">تعذر تحميل الخريطة (اتأكد من الإنترنت).</p>'; return; }
+  map = L.map(el).setView(loc, 12);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'© OpenStreetMap' }).addTo(map);
+  umk = L.marker(loc, { draggable:true, icon:L.divIcon({ html:'<div style="font-size:30px;line-height:30px">📍</div>', className:'', iconSize:[30, 30], iconAnchor:[15, 30] }) }).addTo(map);
+  circ = L.circle(loc, { radius:rad * 1000, color:'#0e5f57', fillOpacity:.08 }).addTo(map);
+  pl = L.layerGroup().addTo(map);
+  const mv = ll => { loc = [ll.lat, ll.lng]; localStorage.setItem('dv_loc', JSON.stringify(loc)); umk.setLatLng(ll); circ.setLatLng(ll); updRes(); };
+  umk.on('dragend', () => mv(umk.getLatLng())); map.on('click', e => mv(e.latlng));
+  map.fitBounds(circ.getBounds()); markers();
+}
+function markers() {
+  if (!pl || !map) return;
+  pl.clearLayers();
+  lastRes.forEach(r => L.circleMarker([r.p.lat, r.p.lng], { radius:8, color:'#b3261e', fillColor:'#b3261e', fillOpacity:.8 }).bindPopup(esc(r.p.name) + '<br>' + r.km.toFixed(1) + ' كم').addTo(pl));
+}
+function setRad(v) {
+  rad = v; $('#rv').textContent = v;
+  if (circ && map) { circ.setRadius(v * 1000); map.fitBounds(circ.getBounds()); }
+  clearTimeout(rt); rt = setTimeout(updRes, 150);
+}
 
 // ===== تسجيل العميل وبياناته =====
-let cv = 's';
+let cv = 's', editP = false, cd = null, mt;
+const UN = { d:'يوم', w:'أسبوع', m:'شهر', y:'سنة' };
 const me = () => S.cu.find(x => x.id == (user ? user.uid : localStorage.getItem('dv_cu')));
-const custForm = c => `<div class="card"><input id="n" placeholder="الاسم" value="${esc(c?.name)}"><input id="ph" type="tel" placeholder="رقم التليفون" value="${esc(c?.phone)}"><input id="ad" placeholder="العنوان" value="${esc(c?.addr)}">
-  <div class="row"><input id="la" placeholder="خط العرض" value="${c?.lat ?? loc[0]}"><input id="lo" placeholder="خط الطول" value="${c?.lng ?? loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div>
-  <label>الأدوية اللي بتاخدها (لو بتاخد، افصل بينهم بفاصلة)<input id="md" placeholder="مثال: كونكور، جلوكوفاج" value="${esc((c?.meds || []).join('، '))}"></label>
-  <button onclick="saveCu()">${c ? 'حفظ' : 'تسجيل'}</button></div>`;
+const normMeds = a => (a || []).map(m => typeof m == 'string' ? { name:m } : m);
+const keepC = () => { if (!cd) return; [['name','n'], ['phone','ph'], ['addr','ad'], ['lat','la'], ['lng','lo']].forEach(([k, i]) => { const e = $('#' + i); if (e) cd[k] = e.value; }); };
+const startEdit = () => { const c = me(); cd = { ...c, meds:normMeds(c.meds).map(m => ({ ...m })) }; editP = true; render(); };
+const cancelEdit = () => { editP = false; cd = null; render(); };
+const msearch = v => { clearTimeout(mt); mt = setTimeout(() => { $('#mres').innerHTML = find(v).map(d => `<span class="chip" onclick="madd('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
+const madd = id => { keepC(); const d = drug(id); cd.meds.push({ d:id, name:d[1] || d[2], chronic:false, n:'', u:'m' }); render(); };
+const mdel = i => { keepC(); cd.meds.splice(i, 1); render(); };
+const mset = (i, k, v) => { cd.meds[i][k] = k == 'n' ? (v === '' ? '' : +v) : v; };
+const custForm = () => { const c = cd; return `<div class="card"><input id="n" placeholder="الاسم" value="${esc(c.name)}"><input id="ph" type="tel" placeholder="رقم التليفون" value="${esc(c.phone)}"><input id="ad" placeholder="العنوان" value="${esc(c.addr)}">
+  <div class="row"><input id="la" placeholder="خط العرض" value="${c.lat ?? loc[0]}"><input id="lo" placeholder="خط الطول" value="${c.lng ?? loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div></div>
+  <h4>الأدوية اللي بتاخدها (لو بتاخد)</h4>
+  <div class="card"><input id="mq" placeholder="ابحث عن الدواء بالاسم (عربي أو إنجليزي) واختاره" oninput="msearch(this.value)"><div id="mres" class="chips"></div></div>
+  ${c.meds.map((m, i) => `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(m.name)}</b><button class="sec" onclick="mdel(${i})">حذف</button></div>
+    <label style="display:flex;align-items:center;gap:6px;margin:6px 0"><input type="checkbox" ${m.chronic ? 'checked' : ''} onchange="mset(${i},'chronic',this.checked)"> دواء مزمن</label>
+    <div class="row"><span>باخده بقالي</span><input type="number" min="0" value="${m.n ?? ''}" style="width:80px" onchange="mset(${i},'n',this.value)"><select style="width:auto" onchange="mset(${i},'u',this.value)">${Object.entries(UN).map(([k, v]) => `<option value="${k}" ${(m.u || 'm') == k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div>`).join('')}
+  <div class="row" style="margin-top:8px"><button onclick="saveCu()">${me() ? 'حفظ التعديلات' : 'تسجيل'}</button>${me() ? '<button class="sec" onclick="cancelEdit()">إلغاء</button>' : ''}</div>`; };
+const custView = c => `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><button onclick="startEdit()">✏️ تعديل</button></div>
+  <div class="meta"><span>📞 ${esc(c.phone)}</span></div><small>${esc(c.addr)}</small></div>
+  <h4>أدويتي</h4>
+  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}<br><small>${m.n ? 'باخده بقالي ' + esc(m.n) + ' ' + UN[m.u || 'm'] : ''}</small></div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط تعديل علشان تضيف.</p>'}`;
 function patient() {
-  if (!me()) return '<h3>بيانات العميل</h3>' + custForm(null);
-  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : '<h3>بياناتي</h3>' + custForm(me()));
+  if (!me()) { if (!cd) cd = { meds:[] }; return '<h3>سجّل بياناتك</h3>' + custForm(); }
+  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? '<h3>تعديل بياناتي</h3>' + custForm() : custView(me()));
 }
 async function saveCu() {
-  const v = i => $('#'+i).value.trim(), o = { ...me(), ...(user ? { id:user.uid } : {}), name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), meds:v('md').split(/[,،\n]/).map(x => x.trim()).filter(Boolean) };
+  keepC(); const c = cd, isNew = !me();
+  const o = { ...me(), ...(user ? { id:user.uid } : {}), name:(c.name || '').trim(), phone:(c.phone || '').trim(), addr:(c.addr || '').trim(), lat:parseFloat(c.lat), lng:parseFloat(c.lng),
+    meds:c.meds.map(m => ({ d:m.d || '', name:m.name, chronic:!!m.chronic, n:(m.n === '' || m.n == null) ? null : +m.n, u:m.u || 'm' })) };
   if (!o.name || !o.phone || !o.addr || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والتليفون والعنوان والموقع.');
   loc = [o.lat, o.lng]; localStorage.setItem('dv_loc', JSON.stringify(loc));
-  localStorage.setItem('dv_cu', (await put('cu', o)).id); cv = 's'; render();
+  localStorage.setItem('dv_cu', (await put('cu', o)).id); editP = false; cd = null; cv = isNew ? 's' : 'p'; render();
 }
 
 // ===== واجهة الصيدلية =====
@@ -453,9 +520,9 @@ async function install() {
     : 'على أندرويد: اضغط على النقاط التلاتة (⋮) فوق في كروم ثم "تثبيت التطبيق" أو "إضافة إلى الشاشة الرئيسية".\nولو مش ظاهرة، اقفل الصفحة وافتحها تاني بعد ثواني.');
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-const refresh = async () => { try { if (fs) await load(); } catch (e) {} render(); };
+const refresh = async () => { try { if (fs) await load(); } catch (e) {} if (role == 'p' && cv == 's' && me() && $('#res')) updRes(); else render(); };
 const pick = async r => { role = r; if (fs && user) await fs.setDoc(fs.doc(fs.db, 'users', user.uid), { role:r }); else localStorage.setItem('dv_role', r); await refresh(); };
-const logout = () => { q = ''; if (fs) return fa.out(fs.auth); role = null; localStorage.removeItem('dv_role'); render(); };
+const logout = () => { q = ''; cd = null; editP = false; cv = 's'; if (fs) return fa.out(fs.auth); role = null; localStorage.removeItem('dv_role'); render(); };
 const errMsg = c => ({ 'auth/invalid-credential':'الإيميل أو الباسورد غلط', 'auth/wrong-password':'الإيميل أو الباسورد غلط', 'auth/user-not-found':'الإيميل أو الباسورد غلط', 'auth/email-already-in-use':'الإيميل ده مسجل قبل كده', 'auth/weak-password':'الباسورد ضعيف (6 حروف على الأقل)', 'auth/invalid-email':'الإيميل مش مكتوب صح', 'auth/network-request-failed':'مفيش اتصال بالإنترنت' }[c] || 'حصل خطأ: ' + c);
 let arole = 'p', showPw = false, ae = '', ap = '';
 const keepAuth = () => { ae = $('#em') ? $('#em').value : ae; ap = $('#pw') ? $('#pw').value : ap; };
@@ -484,6 +551,7 @@ const entry = () => `<h3 style="margin-top:24px">أهلًا بيك، هتسجّ�
 function render() {
   $('#app').innerHTML = (fs ? '' : '<div class="demo">وضع تجريبي: البيانات محفوظة في متصفحك. املا FIREBASE_CONFIG لتشغيل قاعدة البيانات الحقيقية.</div>') + (fs && !user ? authScreen() : !role ? entry() : role == 'p' ? patient() : pharm());
   $('#out').hidden = fs ? !user : !role;
+  initMap();
 }
 (async () => {
   try {
