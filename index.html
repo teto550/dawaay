@@ -374,7 +374,7 @@ async function saveCu() {
   if (!o.name || !o.phone || !o.addr || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والتليفون والعنوان والموقع.');
   o.meds.forEach(m => { if (m.rem.on && m.rem.first == 'now') { const F = lsj('dv_fired'); F[m.name + '|' + m.rem.a] = 1; lss('dv_fired', F); } });
   loc = [o.lat, o.lng]; localStorage.setItem('dv_loc', JSON.stringify(loc));
-  localStorage.setItem('dv_cu', (await put('cu', o)).id); await syncPush(o.meds); editP = false; medOnly = false; cd = null; cv = isNew ? 's' : 'p'; render();
+  localStorage.setItem('dv_cu', (await put('cu', o)).id); await syncPush(o.meds); await syncNative(o.meds); editP = false; medOnly = false; cd = null; cv = isNew ? 's' : 'p'; render();
 }
 
 // ===== واجهة الصيدلية =====
@@ -567,6 +567,14 @@ async function scanQ(c) {
   else vm('الباركود ده مش متسجل عندنا. صوّر اسم الدواء (علبة/شريط) أو اكتب الاسم.');
 }
 // ===== المنبهات (بتشتغل والبرنامج مفتوح أو شغال في الخلفية) =====
+// داخل تطبيق الأندرويد (APK) المنبه بيبقى حقيقي من النظام، ومش محتاجين الإشعارات ولا المنبه اللي جوه الصفحة
+const isNative = !!(window.Capacitor && typeof Capacitor.isNativePlatform == 'function' && Capacitor.isNativePlatform());
+const NA = () => window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.DawaayAlarm;
+async function syncNative(meds) {
+  const p = isNative && NA(); if (!p) return;
+  const list = normMeds(meds).filter(m => m.rem && m.rem.on && m.rem.a).map(m => ({ id:(m.d || m.name) + '_' + m.rem.key, name:m.name, a:m.rem.a, step:Math.round(m.rem.every * 3600000), ends:m.rem.days > 0 ? m.rem.a + m.rem.days * 86400000 : 0 }));
+  try { await p.schedule({ reminders:list }); } catch (e) { console.warn('native alarm', e); }
+}
 const lsj = k => { try { return JSON.parse(localStorage.getItem(k) || '{}'); } catch (e) { return {}; } }, lss = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 const kt = k => +k.slice(k.lastIndexOf('|') + 1), kn = k => k.slice(0, k.lastIndexOf('|'));
 const doseTimes = (m, from, to) => {
@@ -581,7 +589,7 @@ addEventListener('click', unlockAudio);
 const beep = () => { if (!AC) return; const o = AC.createOscillator(), g = AC.createGain(); o.type = 'sine'; o.frequency.value = 880; g.gain.value = .3; o.connect(g); g.connect(AC.destination); o.start(); o.stop(AC.currentTime + .3); };
 const u8 = s => Uint8Array.from(atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
 async function syncPush(meds) {
-  if (!PUSH_URL || !VAPID_PUBLIC || !('PushManager' in window) || !('serviceWorker' in navigator) || !('Notification' in window)) return;
+  if (isNative || !PUSH_URL || !VAPID_PUBLIC || !('PushManager' in window) || !('serviceWorker' in navigator) || !('Notification' in window)) return;
   try {
     const list = normMeds(meds).filter(m => m.rem && m.rem.on && m.rem.a).map(m => ({ id:(m.d || m.name) + '_' + m.rem.key, name:m.name, a:m.rem.a, every:m.rem.every, days:m.rem.days || 0, last:m.rem.first == 'now' ? m.rem.a : m.rem.a - 1 }));
     const reg = await navigator.serviceWorker.ready;
@@ -608,8 +616,9 @@ function ring(list) {
 function stopRing() { clearInterval(beepT); $('#alarm').hidden = true; if (navigator.vibrate) navigator.vibrate(0); }
 const alarmOk = () => { stopRing(); curDue = []; };
 function alarmSnooze() { const Z = lsj('dv_snz'); curDue.forEach(d => { if (d.k != 'test') Z[d.k] = Date.now() + 600000; }); lss('dv_snz', Z); stopRing(); curDue = []; }
-const testAlarm = () => { unlockAudio(); askNotif(); ring([{ k:'test', name:'تجربة المنبه 🔔' }]); };
+const testAlarm = () => { if (isNative && NA()) return NA().ring({ name:'تجربة المنبه 🔔' }); unlockAudio(); askNotif(); ring([{ k:'test', name:'تجربة المنبه 🔔' }]); };
 function tick() {
+  if (isNative) return;
   const c = role == 'p' && me(), al = $('#alarm'); if (!c || !al || !al.hidden) return;
   const now = Date.now(), F = lsj('dv_fired'), Z = lsj('dv_snz'), due = [];
   normMeds(c.meds).forEach(m => doseTimes(m, now - 20 * 60000, now).forEach(t => { const k = m.name + '|' + t; if (!F[k]) due.push({ k, name:m.name }); }));
@@ -622,7 +631,7 @@ function tick() {
 setInterval(tick, 15000);
 let ip = null;
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-if (!standalone) $('#inst').hidden = false;
+if (!standalone && !isNative) $('#inst').hidden = false;
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); ip = e; });
 addEventListener('appinstalled', () => { $('#inst').hidden = true; });
 async function install() {
@@ -675,7 +684,7 @@ function render() {
       fa = { signIn:c.signInWithEmailAndPassword, signUp:c.createUserWithEmailAndPassword, out:c.signOut };
       c.onAuthStateChanged(fs.auth, async u => {
         user = u;
-        if (u) { try { await load(); } catch (e) { alert('خطأ في تحميل البيانات: ' + e.message); } if (role == 'p' && me()) syncPush(me().meds); }
+        if (u) { try { await load(); } catch (e) { alert('خطأ في تحميل البيانات: ' + e.message); } if (role == 'p' && me()) { syncPush(me().meds); syncNative(me().meds); } }
         else { role = null; my = null; S = { ph:[], inv:[], res:[], cu:[], bc:[] }; }
         render();
       });
