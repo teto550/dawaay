@@ -30,7 +30,7 @@ const bc = {}; let n = 0;
 for (const k of rows(kf)) {
   if (!prods.has(k.PRODUCTNDC)) continue;
   if ((k.NDC_EXCLUDE_FLAG || '').toUpperCase() === 'Y' || (k.SAMPLE_PACKAGE || '').toUpperCase() === 'Y') continue;
-  if (k.ENDMARKETINGDATEPACKAGE && +k.ENDMARKETINGDATEPACKAGE < today) continue;
+  const ke = k.ENDMARKETINGDATEPACKAGE || k.ENDMARKETINGDATE; if (ke && +ke < today) continue;
   const d = (k.NDCPACKAGECODE || '').replace(/\D/g, '');
   if (d.length !== 10) continue;
   bc[gtin12(d)] = 'w' + k.PRODUCTNDC; n++;

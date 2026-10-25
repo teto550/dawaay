@@ -107,7 +107,8 @@ const STOP = new Set('mg gm ml tab tabs tablet tablets capsule capsules cap caps
 const bcn = c => String(c).replace(/^0+/, '');
 const ingKey = s => (s || '').toUpperCase().replace(/\([^)]*\)/g, '').split('+').map(x => x.trim()).filter(Boolean).sort().join('+');
 // الأدوية العالمية (اختياري): world.json و world-barcodes.json بيتعملوا بأداة tools/build-world.mjs من ملف FDA
-let WD = [], WNN = [], WTK = [], WL = null;
+let WD = [], WNN = [], WTK = [], WL = null, lastBest = 0;
+const weak = r => r.length < 3 || lastBest < .85; // نتايج مصرية ضعيفة: نكمّل بالعالمية
 const WBC = new Map(), wid = x => String((x && x.d) || '')[0] == 'w';
 function loadWorld() {
   if (!WL) WL = (async () => {
@@ -212,7 +213,9 @@ function find(raw, W) {
     if (sc >= .7) res.push([i, sc]);
   }
   const pop = i => W ? 0 : Math.max(VOC.get(TK[i][0][0]) || 0, VOC.get(TK[i][1][0]) || 0);
-  return res.sort((x, y) => y[1] - x[1] || pop(y[0]) - pop(x[0]) || A[x[0]][2].length - A[y[0]][2].length).slice(0, 8).map(x => A[x[0]]);
+  const srt = res.sort((x, y) => y[1] - x[1] || pop(y[0]) - pop(x[0]) || A[x[0]][2].length - A[y[0]][2].length);
+  if (!W) lastBest = srt.length ? srt[0][1] : 0;
+  return srt.slice(0, 8).map(x => A[x[0]]);
 }
 const hav = (a,b,c,d) => { const r = x => x*Math.PI/180, u = r(c-a), v = r(d-b), h = Math.sin(u/2)**2 + Math.cos(r(a))*Math.cos(r(c))*Math.sin(v/2)**2; return 12742*Math.asin(Math.sqrt(h)); };
 function isOpen(p) {
@@ -247,7 +250,7 @@ function alts(d) {
 }
 function results() {
   let m = find(q);
-  if (m.length < 3 && WD.length) m = [...m, ...find(q, true)].slice(0, 8);
+  if (weak(m) && WD.length) m = [...find(q, true).slice(0, 5), ...m.slice(0, 3)];
   if (pin && drug(pin)) { m = [drug(pin), ...m.filter(x => x[0] != pin)].slice(0, 8); sel = pin; }
   if (!m.length) sel = null; else if (!m.find(d => d[0] == sel)) sel = m[0][0];
   lastRes = [];
@@ -326,7 +329,7 @@ const normMeds = a => (a || []).map(m => typeof m == 'string' ? { name:m } : m);
 const keepC = () => { if (!cd) return; [['name','n'], ['phone','ph'], ['addr','ad'], ['lat','la'], ['lng','lo']].forEach(([k, i]) => { const e = $('#' + i); if (e) cd[k] = e.value; }); };
 const startEdit = (mo) => { const c = me(); cd = { ...c, meds:normMeds(c.meds).map(m => JSON.parse(JSON.stringify(m))) }; editP = true; medOnly = !!mo; render(); if (mo) { const e = $('#mq'); if (e) e.focus(); } };
 const cancelEdit = () => { editP = false; medOnly = false; cd = null; render(); };
-const msearch = v => { clearTimeout(mt); mt = setTimeout(async () => { let r = find(v); if (r.length < 3) { await loadWorld(); if (WD.length) r = [...r, ...find(v, true)].slice(0, 8); } $('#mres').innerHTML = r.map(d => `<span class="chip" onclick="madd('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
+const msearch = v => { clearTimeout(mt); mt = setTimeout(async () => { let r = find(v); if (weak(r)) { await loadWorld(); if (WD.length) r = [...find(v, true).slice(0, 5), ...r.slice(0, 3)]; } $('#mres').innerHTML = r.map(d => `<span class="chip" onclick="madd('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
 const madd = id => { keepC(); const d = drug(id); cd.meds.push({ d:id, name:d[1] || d[2], chronic:false, n:'', u:'m', tpd:'', meal:'any', slots:[] }); render(); };
 const mdel = i => { keepC(); cd.meds.splice(i, 1); render(); };
 const mrem = (i, k, v) => { keepC(); const m = cd.meds[i], r = m.rem = m.rem || { on:false, every:8, days:'', first:'now', start:'08:00' }; r[k] = v; if (k == 'on' && v) askNotif(); if (k == 'on' || k == 'first') render(); };
@@ -415,7 +418,7 @@ async function addInv() {
   await put('inv', { id:my+'_'+d, p:my, d, q:qv, sp, pr }); selD = null; render();
 }
 let selD = null, dt, h5 = null;
-const dsearch = v => { clearTimeout(dt); dt = setTimeout(async () => { let r = find(v); if (r.length < 3) { await loadWorld(); if (WD.length) r = [...r, ...find(v, true)].slice(0, 8); } $('#dres').innerHTML = r.map(d => `<span class="chip" onclick="pickD('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
+const dsearch = v => { clearTimeout(dt); dt = setTimeout(async () => { let r = find(v); if (weak(r)) { await loadWorld(); if (WD.length) r = [...find(v, true).slice(0, 5), ...r.slice(0, 3)]; } $('#dres').innerHTML = r.map(d => `<span class="chip" onclick="pickD('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
 function pickD(id) {
   selD = id; const d = drug(id);
   $('#dsel').innerHTML = '✔ المختار: <b>' + esc(d[1]) + ' · ' + esc(d[2]) + '</b>';
@@ -629,7 +632,7 @@ async function install() {
     : 'على أندرويد: اضغط على النقاط التلاتة (⋮) فوق في كروم ثم "تثبيت التطبيق" أو "إضافة إلى الشاشة الرئيسية".\nولو مش ظاهرة، اقفل الصفحة وافتحها تاني بعد ثواني.');
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-const refresh = async () => { try { if (fs) await load(); if (role == 'p' && q && find(q).length < 3) await loadWorld(); } catch (e) {} if (role == 'p' && cv == 's' && me() && $('#res')) updRes(); else render(); };
+const refresh = async () => { try { if (fs) await load(); if (role == 'p' && q && weak(find(q))) await loadWorld(); } catch (e) {} if (role == 'p' && cv == 's' && me() && $('#res')) updRes(); else render(); };
 const pick = async r => { role = r; if (fs && user) await fs.setDoc(fs.doc(fs.db, 'users', user.uid), { role:r }); else localStorage.setItem('dv_role', r); await refresh(); };
 const logout = () => { q = ''; cd = null; editP = false; cv = 's'; if (fs) return fa.out(fs.auth); role = null; localStorage.removeItem('dv_role'); render(); };
 const errMsg = c => ({ 'auth/invalid-credential':'الإيميل أو الباسورد غلط', 'auth/wrong-password':'الإيميل أو الباسورد غلط', 'auth/user-not-found':'الإيميل أو الباسورد غلط', 'auth/email-already-in-use':'الإيميل ده مسجل قبل كده', 'auth/weak-password':'الباسورد ضعيف (6 حروف على الأقل)', 'auth/invalid-email':'الإيميل مش مكتوب صح', 'auth/network-request-failed':'مفيش اتصال بالإنترنت' }[c] || 'حصل خطأ: ' + c);
