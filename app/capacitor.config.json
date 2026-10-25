@@ -1,6 +1,0 @@
-{
-  "appId": "com.dawaay.app",
-  "appName": "دوائي",
-  "webDir": "www",
-  "server": { "url": "https://teto550.github.io/dawaay/", "androidScheme": "https", "cleartext": false }
-}
