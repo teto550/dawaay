@@ -60,10 +60,11 @@ export async function tick(env, nowMs = Date.now()) {
     const late = nowMs - r.next_due > 30 * 60000; // فاتت من زمان: نتخطاها
     let ok = false, gone = false;
     if (!late) {
-      try { const res = await sendPush(env, r, { title: '⏰ ميعاد الدواء', body: r.name, tag: 'dose-' + r.id }); ok = res.ok; gone = res.status === 404 || res.status === 410; } catch (e) {}
+      try { const res = await sendPush(env, r, { title: '⏰ ميعاد الدواء', body: r.name, k: r.id + '|' + r.next_due }); ok = res.ok; gone = res.status === 404 || res.status === 410; } catch (e) {}
+      if (ok) await env.DB.prepare('INSERT OR REPLACE INTO alerts (endpoint, k, name, tries, repeat_at) VALUES (?1, ?2, ?3, 0, ?4)').bind(r.endpoint, r.id + '|' + r.next_due, r.name, nowMs + 60000).run();
     }
     if (gone) {
-      await env.DB.batch([env.DB.prepare('DELETE FROM reminders WHERE endpoint = ?1').bind(r.endpoint), env.DB.prepare('DELETE FROM subs WHERE endpoint = ?1').bind(r.endpoint)]);
+      await dropSub(env, r.endpoint);
       out.push({ id: r.id, gone: true }); continue;
     }
     if (!ok && !late) { out.push({ id: r.id, retry: true }); continue; } // نحاول تاني في الدقيقة الجاية
@@ -71,7 +72,31 @@ export async function tick(env, nowMs = Date.now()) {
     await (nx === null ? env.DB.prepare('DELETE FROM reminders WHERE endpoint = ?1 AND id = ?2').bind(r.endpoint, r.id) : env.DB.prepare('UPDATE reminders SET next_due = ?1 WHERE endpoint = ?2 AND id = ?3').bind(nx, r.endpoint, r.id)).run();
     out.push({ id: r.id, sent: ok });
   }
+  // تكرار التنبيه كل دقيقة لحد ما العميل يضغط "أخدته" (أو لحد REPEATS مرة)
+  const max = +env.REPEATS || 5;
+  const al = await env.DB.prepare('SELECT a.endpoint, a.k, a.name, a.tries, a.repeat_at, s.p256dh, s.auth FROM alerts a JOIN subs s ON s.endpoint = a.endpoint WHERE a.repeat_at <= ?1 ORDER BY a.repeat_at LIMIT 20').bind(nowMs + 5000).all();
+  for (const a of al.results) {
+    if (nowMs - a.repeat_at > 30 * 60000) { await env.DB.prepare('DELETE FROM alerts WHERE endpoint = ?1 AND k = ?2').bind(a.endpoint, a.k).run(); continue; }
+    let ok = false, gone = false;
+    try { const res = await sendPush(env, a, { title: '⏰ لسه ما أخدتش الدواء', body: a.name, k: a.k, repeat: a.tries + 1 }); ok = res.ok; gone = res.status === 404 || res.status === 410; } catch (e) {}
+    if (gone) { await dropSub(env, a.endpoint); out.push({ k: a.k, gone: true }); continue; }
+    await (a.tries + 1 >= max ? env.DB.prepare('DELETE FROM alerts WHERE endpoint = ?1 AND k = ?2').bind(a.endpoint, a.k) : env.DB.prepare('UPDATE alerts SET tries = tries + 1, repeat_at = ?3 WHERE endpoint = ?1 AND k = ?2').bind(a.endpoint, a.k, nowMs + 60000)).run();
+    out.push({ k: a.k, repeat: a.tries + 1, sent: ok });
+  }
   return out;
+}
+
+async function dropSub(env, endpoint) {
+  await env.DB.batch([env.DB.prepare('DELETE FROM alerts WHERE endpoint = ?1').bind(endpoint), env.DB.prepare('DELETE FROM reminders WHERE endpoint = ?1').bind(endpoint), env.DB.prepare('DELETE FROM subs WHERE endpoint = ?1').bind(endpoint)]);
+}
+
+// العميل ضغط "أخدته" أو "بعد 10 دقايق" أو شال الإشعار
+async function ack(req, env) {
+  const raw = await req.text(); if (raw.length > 2000) return new Response('too big', { status: 413 });
+  let b; try { b = JSON.parse(raw); } catch (e) { return new Response('bad json', { status: 400 }); }
+  if (typeof b.endpoint !== 'string' || typeof b.k !== 'string') return new Response('bad', { status: 400 });
+  await (b.snooze ? env.DB.prepare('UPDATE alerts SET tries = 0, repeat_at = ?3 WHERE endpoint = ?1 AND k = ?2').bind(b.endpoint, b.k, Date.now() + 10 * 60000) : env.DB.prepare('DELETE FROM alerts WHERE endpoint = ?1 AND k = ?2').bind(b.endpoint, b.k)).run();
+  return new Response('ok');
 }
 
 const cors = env => ({ 'Access-Control-Allow-Origin': env.ALLOW_ORIGIN, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
@@ -98,9 +123,9 @@ export default {
   async fetch(req, env) {
     const u = new URL(req.url), h = cors(env);
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
-    if (req.method === 'POST' && u.pathname === '/sync') {
+    if (req.method === 'POST' && (u.pathname === '/sync' || u.pathname === '/ack')) {
       if (req.headers.get('Origin') !== env.ALLOW_ORIGIN) return new Response('forbidden', { status: 403, headers: h });
-      const r = await sync(req, env); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
+      const r = await (u.pathname === '/ack' ? ack(req, env) : sync(req, env)); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
       return new Response(r.body, { status: r.status, headers: hh });
     }
     return new Response('dawaay push worker: ok');

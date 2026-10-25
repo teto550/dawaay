@@ -15,3 +15,14 @@ CREATE TABLE IF NOT EXISTS reminders (
   PRIMARY KEY (endpoint, id)
 );
 CREATE INDEX IF NOT EXISTS idx_due ON reminders(next_due);
+
+-- تنبيهات بتتكرر كل دقيقة لحد ما العميل يرد
+CREATE TABLE IF NOT EXISTS alerts (
+  endpoint  TEXT NOT NULL,
+  k         TEXT NOT NULL,
+  name      TEXT NOT NULL,
+  tries     INTEGER NOT NULL,
+  repeat_at INTEGER NOT NULL,
+  PRIMARY KEY (endpoint, k)
+);
+CREATE INDEX IF NOT EXISTS idx_alert ON alerts(repeat_at);
