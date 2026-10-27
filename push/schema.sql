@@ -26,3 +26,10 @@ CREATE TABLE IF NOT EXISTS alerts (
   PRIMARY KEY (endpoint, k)
 );
 CREATE INDEX IF NOT EXISTS idx_alert ON alerts(repeat_at);
+
+-- عدّاد قراءات الصور بالذكاء الاصطناعي (حد لكل جهاز في الساعة)
+CREATE TABLE IF NOT EXISTS rl (
+  k  TEXT PRIMARY KEY,
+  hr INTEGER NOT NULL,
+  n  INTEGER NOT NULL
+);

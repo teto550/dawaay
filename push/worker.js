@@ -54,6 +54,7 @@ async function sendPush(env, row, message) {
 }
 
 export async function tick(env, nowMs = Date.now()) {
+  if (nowMs % 3600000 < 60000) await env.DB.prepare('DELETE FROM rl WHERE hr < ?1').bind(Math.floor(nowMs / 3600000) - 2).run();
   const { results } = await env.DB.prepare('SELECT r.id, r.endpoint, r.name, r.a, r.step, r.ends, r.next_due, s.p256dh, s.auth FROM reminders r JOIN subs s ON s.endpoint = r.endpoint WHERE r.next_due IS NOT NULL AND r.next_due <= ?1 ORDER BY r.next_due LIMIT 40').bind(nowMs + 5000).all();
   const out = [];
   for (const r of results) {
@@ -99,6 +100,30 @@ async function ack(req, env) {
   return new Response('ok');
 }
 
+// ===== قراءة الصور بـ Gemini من السيرفر (المفتاح سرّ هنا مش في التطبيق) =====
+const AI_PROMPT = 'You are helping an Egyptian pharmacy app. The photo shows a medicine box, a medicine strip/blister, or a handwritten doctor prescription (Arabic and/or English; messy handwriting is common). List every medicine you can identify. Use context (typical Egyptian brand and generic names, dosage patterns like "1x3", abbreviations like tab, cap, syr, amp) to decode unclear handwriting; give your best guess and lower the confidence when unsure. Do not invent medicines that are not written in the image. Ignore patient and doctor personal details. Reply with JSON only: {"type":"box|strip|prescription","items":[{"name":"brand or generic name in English letters","arabic":"name in Arabic if written, else empty","strength":"e.g. 500 mg, or empty","dose":"dosing instruction translated to Arabic, or empty","confidence":0.0}]}';
+const jres = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'Content-Type': 'application/json' } });
+
+async function read(req, env) {
+  if (!env.GEMINI_API_KEY) return jres({ error: 'not configured' }, 501);
+  const raw = await req.text(); if (raw.length > 4000000) return jres({ error: 'too big' }, 413);
+  let b; try { b = JSON.parse(raw); } catch (e) { return jres({ error: 'bad json' }, 400); }
+  if (typeof b.image !== 'string' || b.image.length < 100) return jres({ error: 'bad image' }, 400);
+  // حد استخدام لكل جهاز: READ_LIMIT قراءة في الساعة (افتراضي 30)
+  const hr = Math.floor(Date.now() / 3600000), key = (req.headers.get('CF-Connecting-IP') || 'x') + '|' + hr;
+  await env.DB.prepare('INSERT INTO rl (k, hr, n) VALUES (?1, ?2, 1) ON CONFLICT(k) DO UPDATE SET n = n + 1').bind(key, hr).run();
+  const row = await env.DB.prepare('SELECT n FROM rl WHERE k = ?1').bind(key).first();
+  if (row && row.n > (+env.READ_LIMIT || 30)) return jres({ error: 'limit' }, 429);
+  const model = env.GEMINI_MODEL || 'gemini-flash-latest';
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify({ contents: [{ parts: [{ text: AI_PROMPT }, { inline_data: { mime_type: 'image/jpeg', data: b.image } }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return jres({ error: (j.error && j.error.message) || 'ai error' }, r.status === 429 ? 429 : 502);
+  try {
+    const txt = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
+    return jres({ items: (JSON.parse(txt.replace(/```json|```/g, '')).items || []).slice(0, 12) });
+  } catch (e) { return jres({ error: 'bad ai reply' }, 502); }
+}
+
 const cors = env => ({ 'Access-Control-Allow-Origin': env.ALLOW_ORIGIN, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
 const num = (v, lo, hi) => Number.isFinite(+v) && +v >= lo && +v <= hi;
 
@@ -123,9 +148,9 @@ export default {
   async fetch(req, env) {
     const u = new URL(req.url), h = cors(env);
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
-    if (req.method === 'POST' && (u.pathname === '/sync' || u.pathname === '/ack')) {
+    if (req.method === 'POST' && (u.pathname === '/sync' || u.pathname === '/ack' || u.pathname === '/read')) {
       if (req.headers.get('Origin') !== env.ALLOW_ORIGIN) return new Response('forbidden', { status: 403, headers: h });
-      const r = await (u.pathname === '/ack' ? ack(req, env) : sync(req, env)); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
+      const r = await (u.pathname === '/ack' ? ack(req, env) : u.pathname === '/read' ? read(req, env) : sync(req, env)); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
       return new Response(r.body, { status: r.status, headers: hh });
     }
     return new Response('dawaay push worker: ok');

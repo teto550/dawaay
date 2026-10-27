@@ -508,57 +508,131 @@ function mic() {
   };
   try { r.start(); } catch (e) { vm('مقدرتش أشغّل الميكروفون: ' + e.message); }
 }
-function ocrCands(text) {
-  const toks = [...new Set(norm(text).split(' ').filter(t => t.length >= 3 && !/^\d+$/.test(t) && !STOP.has(t)))], hits = new Map();
-  for (const t of toks) {
+// أخطاء القراءة الشائعة: أرقام بدل حروف (PANAD0L)
+const OCRSUB = { '0':'o', '1':'l', '5':'s', '8':'b', '6':'g' };
+// words: [{ t, h }] حيث h ارتفاع الكلمة في الصورة (الاسم التجاري غالبًا أكبر خط)
+function ocrCandsW(words) {
+  const maxH = Math.max(1, ...words.map(w => w.h || 1)), hits = new Map();
+  for (const w of words) {
+    const t = norm(w.t); if (t.length < 3 || /^\d+$/.test(t) || STOP.has(t)) continue;
     let k = VOC.has(t) ? t : null, sc = 1;
+    if (!k && /\d/.test(t)) { const u = t.replace(/[01568]/g, c => OCRSUB[c]); if (VOC.has(u)) { k = u; sc = .95; } }
     if (!k) {
       const mx = t.length >= 8 ? 2 : t.length >= 5 ? 1 : 0; if (!mx) continue; sc = .8; let bd = 99;
-      for (const v of VOCK) { if (Math.abs(v.length - t.length) > mx || VOC.get(v) < 2) continue; const d = lev(t, v, mx); if (d <= mx && d < bd) { bd = d; k = v; } }
+      for (const v of VOCK) { if (Math.abs(v.length - t.length) > mx || (VOC.get(v) < 2 && t.length < 7)) continue; const d = lev(t, v, mx); if (d <= mx && d < bd) { bd = d; k = v; } }
     }
-    if (k) hits.set(k, Math.max(hits.get(k) || 0, sc * (k.length >= 5 ? 1 : .9)));
+    if (!k && t.length >= 6) { // قريت أول الاسم بس (لمعان/قطع): نكمّله من القاعدة
+      let bc = 0; for (const v of VOCK) if (v.length - t.length <= 6 && v.startsWith(t) && VOC.get(v) > bc) { bc = VOC.get(v); k = v; sc = .7; }
+    }
+    if (!k) continue;
+    const h = hits.get(k) || { sc:0, hh:0, n:0 }; h.sc = Math.max(h.sc, sc); h.hh = Math.max(h.hh, (w.h || 1) / maxH); h.n++; hits.set(k, h);
   }
-  return [...hits].sort((a, b) => VOC.get(b[0]) - VOC.get(a[0]) || b[1] - a[1] || b[0].length - a[0].length).slice(0, 6).map(([k]) => ({ k, t: k + ' (' + VOC.get(k) + ' صنف)' }));
+  return [...hits].map(([k, h]) => [k, h, h.sc * (.6 + .8 * h.hh) * (1 + .2 * (h.n - 1)) + .02 * Math.log(1 + VOC.get(k))]).sort((a, b) => b[2] - a[2]).slice(0, 6)
+    .map(([k, h]) => ({ k, sc:h.sc, n:h.n, t:k + ' (' + VOC.get(k) + ' صنف)' }));
 }
+const ocrCands = text => ocrCandsW(norm(text).split(' ').map(t => ({ t, h:1 })));
 const rxCard = r => `<div class="card"><b>الروشتة / العلبة (قراءة تقريبية)</b><small style="display:block;margin:2px 0 6px">الذكاء الاصطناعي ممكن يغلط في الخط اليدوي. اتأكد من الدكتور أو الصيدلي قبل ما تاخد أي دواء.</small>
   ${r.map((x, i) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:6px 0"><span><b>${esc(x.name || x.arabic)}</b> ${esc(x.strength || '')}${x.arabic && x.name ? ' · ' + esc(x.arabic) : ''}<br><small>${esc(x.dose || '')}${x.confidence < .6 ? ' · مش واضح' : ''}${x.ok ? '' : ' · مش لاقيه في القاعدة'}</small></span><button onclick="rxGo(${i})">ابحث</button></div>`).join('')}</div>`;
 const rxGo = i => { const keep = ocrC.rx; q = keep[i].q; pin = null; ocrC = []; ocrC.rx = keep; refresh(); };
+
+// ===== القراءة بالذكاء الاصطناعي (Gemini): مباشرة بمفتاح، أو عن طريق سيرفرك (الأفضل: المفتاح مش ظاهر) =====
+const AI_PROMPT = 'You are helping an Egyptian pharmacy app. The photo shows a medicine box, a medicine strip/blister, or a handwritten doctor prescription (Arabic and/or English; messy handwriting is common). List every medicine you can identify. Use context (typical Egyptian brand and generic names, dosage patterns like "1x3", abbreviations like tab, cap, syr, amp) to decode unclear handwriting; give your best guess and lower the confidence when unsure. Do not invent medicines that are not written in the image. Ignore patient and doctor personal details. Reply with JSON only: {"type":"box|strip|prescription","items":[{"name":"brand or generic name in English letters","arabic":"name in Arabic if written, else empty","strength":"e.g. 500 mg, or empty","dose":"dosing instruction translated to Arabic, or empty","confidence":0.0}]}';
+async function aiItems(b64) {
+  if (GEMINI_KEY) {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', { method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key':GEMINI_KEY }, body:JSON.stringify({ contents:[{ parts:[{ text:AI_PROMPT }, { inline_data:{ mime_type:'image/jpeg', data:b64 } }] }], generationConfig:{ temperature:0, responseMimeType:'application/json' } }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(r.status == 429 ? 'الحد المجاني خلص دلوقتي' : ((j.error && j.error.message) || r.status));
+    const txt = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
+    return JSON.parse(txt.replace(/```json|```/g, '')).items || [];
+  }
+  if (PUSH_URL) {
+    const r = await fetch(PUSH_URL + '/read', { method:'POST', headers:{ 'Content-Type':'text/plain' }, body:JSON.stringify({ image:b64 }) });
+    if (r.status == 501) return null; // السيرفر مفيهوش مفتاح Gemini
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status == 429 ? 'وصلت للحد المسموح دلوقتي، جرّب بعد شوية' : (j.error || 'خطأ ' + r.status));
+    return j.items || [];
+  }
+  return null;
+}
+// true = اتقرت، false = فشلت، null = مش مفعّلة
 async function ocrAI(f) {
   vm('بقرا الصورة بالذكاء الاصطناعي… (ممكن ياخد ثواني)');
   try {
     const img = await createImageBitmap(f), sc = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
     cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-    const b64 = cv.toDataURL('image/jpeg', .85).split(',')[1];
-    const prompt = 'You are helping an Egyptian pharmacy app. The photo shows a medicine box, a medicine strip/blister, or a handwritten doctor prescription (Arabic and/or English; messy handwriting is common). List every medicine you can identify. Use context (typical Egyptian brand and generic names, dosage patterns like "1x3", abbreviations like tab, cap, syr, amp) to decode unclear handwriting; give your best guess and lower the confidence when unsure. Do not invent medicines that are not written in the image. Ignore patient and doctor personal details. Reply with JSON only: {"type":"box|strip|prescription","items":[{"name":"brand or generic name in English letters","arabic":"name in Arabic if written, else empty","strength":"e.g. 500 mg, or empty","dose":"dosing instruction translated to Arabic, or empty","confidence":0.0}]}';
-    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', { method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key':GEMINI_KEY }, body:JSON.stringify({ contents:[{ parts:[{ text:prompt }, { inline_data:{ mime_type:'image/jpeg', data:b64 } }] }], generationConfig:{ temperature:0, responseMimeType:'application/json' } }) });
-    const j = await r.json();
-    if (!r.ok) return vm(r.status == 429 ? 'الحد المجاني للقراءة بالذكاء الاصطناعي خلص دلوقتي، جرّب بعد شوية.' : 'خطأ من خدمة القراءة: ' + ((j.error && j.error.message) || r.status));
-    const txt = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
-    const items = (JSON.parse(txt.replace(/```json|```/g, '')).items || []).filter(x => x.name || x.arabic).slice(0, 12);
-    if (!items.length) return vm('معرفتش أقرا أدوية من الصورة. صوّر من قريب وبإضاءة كويسة.');
+    let items;
+    try { items = await aiItems(cv.toDataURL('image/jpeg', .85).split(',')[1]); }
+    catch (e) { vm('القراءة بالذكاء الاصطناعي مش متاحة (' + (e.message || e) + ')، بجرّب القراءة العادية…'); return false; }
+    if (items === null) return null;
+    items = items.filter(x => x.name || x.arabic).slice(0, 12);
+    if (!items.length) { vm('الذكاء الاصطناعي معرفش يقرا أدوية، بجرّب القراءة العادية…'); return false; }
     items.forEach(x => { const c = ocrCands((x.name || '') + ' ' + (x.arabic || '')); x.q = c.length ? c[0].k : (x.name || x.arabic); x.ok = c.length > 0; });
     q = items[0].q; pin = null; ocrC = []; ocrC.rx = items; await refresh();
     vm('قريت ' + items.length + ' دواء. اضغط "ابحث" جنب أي واحد.');
-  } catch (e) { vm('حصل خطأ: ' + (e.message || e)); }
+    return true;
+  } catch (e) { vm('حصل خطأ: ' + (e.message || e)); return false; }
 }
-async function ocr(f) {
-  if (!f) return;
-  if (GEMINI_KEY) return ocrAI(f);
+
+// ===== القراءة العادية (Tesseract): تصغير + زوايا ميل + أوضح قناة لون، ومطابقة بحجم الخط =====
+function prepCanvas(bmp, s, ang, mode) {
+  const w = Math.max(8, Math.round(bmp.width * s)), h = Math.max(8, Math.round(bmp.height * s)), cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d'); c.fillStyle = '#808080'; c.fillRect(0, 0, w, h);
+  c.translate(w / 2, h / 2); c.rotate(ang * Math.PI / 180); c.drawImage(bmp, -w / 2, -h / 2, w, h);
+  const id = c.getImageData(0, 0, w, h), d = id.data, n = w * h;
+  let ch = -1; // -1 = لمعان، 0/1/2 = قناة لون
+  if (mode == 'best') {
+    const sum = [0, 0, 0], sq = [0, 0, 0]; let m = 0;
+    for (let i = 0; i < n; i += 7) { for (let j = 0; j < 3; j++) { const v = d[i * 4 + j]; sum[j] += v; sq[j] += v * v; } m++; }
+    const sd = sum.map((x, j) => Math.sqrt(Math.max(0, sq[j] / m - (x / m) ** 2))); ch = sd.indexOf(Math.max(...sd));
+  }
+  const g = new Uint8Array(n), hist = new Uint32Array(256);
+  for (let i = 0; i < n; i++) { const v = ch < 0 ? (d[i * 4] * .299 + d[i * 4 + 1] * .587 + d[i * 4 + 2] * .114) | 0 : d[i * 4 + ch]; g[i] = v; hist[v]++; }
+  let lo = 0, hi = 255, acc = 0;
+  for (; lo < 255 && acc < n * .02; lo++) acc += hist[lo];
+  acc = 0; for (; hi > 0 && acc < n * .02; hi--) acc += hist[hi];
+  const r = Math.max(1, hi - lo);
+  for (let i = 0; i < n; i++) { const v = Math.max(0, Math.min(255, ((g[i] - lo) * 255 / r) | 0)); d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+  c.putImageData(id, 0, 0);
+  return cv;
+}
+function collectWords(ws, s) {
+  const v = (ws || []).filter(x => x.text && x.text.trim().length > 1).map(x => ({ t:x.text, h:(x.bbox.y1 - x.bbox.y0) / s })), out = [];
+  v.forEach((x, i) => { out.push(x); const y = v[i + 1]; if (y && x.t.length >= 3 && Math.abs(x.h - y.h) < Math.max(x.h, y.h) * .5) out.push({ t:x.t + y.t, h:Math.max(x.h, y.h) }); });
+  return out;
+}
+async function ocrTess(f) {
   vm('جاري تجهيز قارئ الصور (أول مرة بياخد وقت لأنه بيحمّل اللغات)…');
   if (!window.Tesseract) await new Promise(ok => { const t = document.createElement('script'); t.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; t.onload = ok; t.onerror = ok; document.head.appendChild(t); });
   if (!window.Tesseract) return vm('تعذر تحميل قارئ الصور. اتأكد من الإنترنت.');
+  let w;
   try {
-    const img = await createImageBitmap(f), sc = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
-    cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-    const w = await Tesseract.createWorker('eng+ara', 1, { logger: m => vm(m.status == 'recognizing text' ? 'بقرا الصورة… ' + Math.round(m.progress * 100) + '%' : 'تحميل: ' + m.status) });
-    const { data } = await w.recognize(cv); await w.terminate();
-    const txt = data.words && data.words.length ? data.words.filter(x => x.confidence >= 55).map(x => x.text).join(' ') : data.text;
-    ocrC = ocrCands(txt);
-    if (!ocrC.length) return vm('معرفتش أقرا اسم دواء من الصورة. صوّر من قريب وبإضاءة كويسة والاسم واضح، أو اكتب الاسم.');
+    const bmp = await createImageBitmap(f), k = 1600 / Math.max(bmp.width, bmp.height);
+    w = await Tesseract.createWorker('eng+ara', 1, { logger: m => { if (m.status != 'recognizing text') vm('تحميل: ' + m.status); } });
+    await w.setParameters({ tessedit_pageseg_mode:'11' });
+    const plan = [[.5, 0, 'gray'], [.3, 0, 'gray'], [.4, -8, 'gray'], [.4, 8, 'gray'], [.4, -4, 'gray'], [.4, 4, 'gray'], [.4, 0, 'best']], words = [];
+    let cands = [];
+    for (let i = 0; i < plan.length; i++) {
+      const [s, a, m] = plan[i]; vm('بقرا الصورة… (محاولة ' + (i + 1) + ' من ' + plan.length + ')');
+      const { data } = await w.recognize(prepCanvas(bmp, s * k, a, m));
+      words.push(...collectWords(data.words, s));
+      cands = ocrCandsW(words);
+      const top = cands[0];
+      if (top && top.sc == 1 && top.k.length >= 5 && (i >= 1 || top.n >= 2)) break; // لقينا اسم واضح
+    }
+    ocrC = cands;
+    if (!ocrC.length) return vm('معرفتش أقرا اسم دواء من الصورة. صوّر من قريب وبإضاءة كويسة والاسم واضح (من غير لمعان)، أو اكتب الاسم أو استخدم الصوت.');
     q = ocrC[0].k; pin = null; await refresh();
     vm('لقيت في الصورة: ' + ocrC.map(c => c.k).join('، ') + (ocrC.length > 1 ? ' — اختار الاسم الصح من فوق.' : ''));
   } catch (e) { vm('حصل خطأ في قراءة الصورة: ' + (e.message || e)); }
+  finally { try { if (w) await w.terminate(); } catch (_) {} }
 }
+async function ocr(f) {
+  if (!f) return;
+  if (GEMINI_KEY || PUSH_URL) { const r = await ocrAI(f); if (r === true) return; }
+  return ocrTess(f);
+}
+
 async function scanQ(c) {
   const m = S.bc.find(x => bcn(x.id) == bcn(c));
   let id = (m && m.d) || BCS.get(bcn(c));
