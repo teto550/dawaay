@@ -362,7 +362,7 @@ const custForm = () => { const c = cd; return `${medOnly ? '<h3>إضافة دو�
 const custView = c => `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><button onclick="startEdit()">✏️ تعديل</button></div>
   <div class="meta"><span>📞 ${esc(c.phone)}</span></div><small>${esc(c.addr)}</small></div>
   <div class="row" style="justify-content:space-between;margin-top:12px"><h4 style="margin:0">أدويتي</h4><button onclick="startEdit(1)">➕ إضافة دواء</button></div>
-  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}${remTxt(m) ? `<br><small>${esc(remTxt(m))}</small><br>${alarmLink(m)}` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}${normMeds(c.meds).some(m => m.rem && m.rem.on) ? '<button class="sec" style="margin-top:8px" onclick="testAlarm()">🔔 جرّب صوت المنبه</button>' : ''}`;
+  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}${remTxt(m) ? `<br><small>${esc(remTxt(m))}</small><br>${alarmLink(m)}` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}<div style="margin-top:14px"><button class="sec" onclick="testNotif()">🔔 جرّب الإشعار (بعد 5 ثواني)</button><small style="display:block;margin-top:6px">لو الإشعار جه من غير صوت: إعدادات الموبايل ← التطبيقات ← Chrome (أو دوائي) ← الإشعارات ← اختار تصنيف الموقع ← الأهمية Urgent أو High والصوت مش «بدون صوت»، واتأكد إن الموبايل مش صامت ولا على «عدم الإزعاج».</small></div>${normMeds(c.meds).some(m => m.rem && m.rem.on) ? '<button class="sec" style="margin-top:8px" onclick="testAlarm()">🔔 جرّب صوت المنبه</button>' : ''}`;
 function patient() {
   if (!me()) { if (!cd) cd = { meds:[] }; return '<h3>سجّل بياناتك</h3>' + custForm(); }
   return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? (medOnly ? '' : '<h3>تعديل بياناتي</h3>') + custForm() : custView(me()));
@@ -690,6 +690,16 @@ function ring(list) {
 function stopRing() { clearInterval(beepT); $('#alarm').hidden = true; if (navigator.vibrate) navigator.vibrate(0); }
 const alarmOk = () => { stopRing(); curDue = []; };
 function alarmSnooze() { const Z = lsj('dv_snz'); curDue.forEach(d => { if (d.k != 'test') Z[d.k] = Date.now() + 600000; }); lss('dv_snz', Z); stopRing(); curDue = []; }
+async function testNotif() {
+  unlockAudio();
+  if (!('Notification' in window)) return alert('المتصفح مش بيدعم الإشعارات.');
+  if (Notification.permission != 'granted' && await Notification.requestPermission() != 'granted') return alert('الإشعارات مقفولة. فعّلها من القفل جنب الرابط ثم الأذونات ثم الإشعارات.');
+  alert('تمام. اقفل الشاشة، وبعد 5 ثواني هيجيلك إشعار تجريبي.');
+  setTimeout(async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) reg.showNotification('⏰ تجربة إشعار الدواء', { body:'لو سمعت صوت واهتزاز يبقى الإعدادات تمام', icon:'icon-192.png', badge:'icon-192.png', vibrate:[600, 200, 600, 200, 600], tag:'test-' + Date.now(), requireInteraction:true, silent:false });
+  }, 5000);
+}
 const testAlarm = () => { if (isNative && NA()) return NA().ring({ name:'تجربة المنبه 🔔' }); unlockAudio(); askNotif(); ring([{ k:'test', name:'تجربة المنبه 🔔' }]); };
 function tick() {
   if (isNative) return;
