@@ -614,7 +614,7 @@ async function ocrTess(f) {
     const bmp = await createImageBitmap(f), k = 1600 / Math.max(bmp.width, bmp.height);
     w = await Tesseract.createWorker('eng+ara', 1, { logger: m => { if (m.status != 'recognizing text') vm('تحميل: ' + m.status); } });
     await w.setParameters({ tessedit_pageseg_mode:'11' });
-    const plan = [[.5, 0, 'gray'], [.3, 0, 'gray'], [.4, -8, 'gray'], [.4, 8, 'gray'], [.4, -4, 'gray'], [.4, 4, 'gray'], [.4, 0, 'best']], words = [];
+    const plan = [[.5, 0, 'gray'], [.3, 0, 'gray'], [.4, -8, 'gray'], [.4, 8, 'gray'], [.4, -4, 'gray'], [.4, 4, 'gray'], [.4, 0, 'best'], [.8, 0, 'gray'], [1, 0, 'best']], words = []; // آخر محاولتين بمقياس أكبر للحروف الصغيرة (الشرايط)
     let cands = [];
     for (let i = 0; i < plan.length; i++) {
       const [s, a, m] = plan[i]; vm('بقرا الصورة… (محاولة ' + (i + 1) + ' من ' + plan.length + ')');
@@ -625,7 +625,10 @@ async function ocrTess(f) {
       if (top && top.sc == 1 && top.k.length >= 5 && (i >= 1 || top.n >= 2)) break; // لقينا اسم واضح
     }
     ocrC = cands;
-    if (!ocrC.length) return vm('معرفتش أقرا اسم دواء من الصورة. صوّر من قريب وبإضاءة كويسة والاسم واضح (من غير لمعان)، أو اكتب الاسم أو استخدم الصوت.');
+    if (!ocrC.length) {
+      const seen = [...new Set(words.map(x => x.t).filter(t => /[A-Za-z\u0621-\u064A]{3,}/.test(t)))].slice(0, 14).join(' ');
+      return vm('معرفتش أقرا اسم دواء من الصورة. صوّر الشريط من قريب (الاسم يملا الصورة) ومن غير لمعان، أو اكتب الاسم أو استخدم الصوت.' + (seen ? ' — اللي اتقرا: «' + seen + '»' : ' — مفيش أي نص اتقرا.'));
+    }
     q = ocrC[0].k; pin = null; await refresh();
     vm('لقيت في الصورة: ' + ocrC.map(c => c.k).join('، ') + (ocrC.length > 1 ? ' — اختار الاسم الصح من فوق.' : ''));
   } catch (e) { vm('حصل خطأ في قراءة الصورة: ' + (e.message || e)); }
