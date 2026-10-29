@@ -536,11 +536,11 @@ function ocrCandsW(words) {
 }
 const ocrCands = text => ocrCandsW(norm(text).split(' ').map(t => ({ t, h:1 })));
 const rxCard = r => `<div class="card"><b>الروشتة / العلبة (قراءة تقريبية)</b><small style="display:block;margin:2px 0 6px">الذكاء الاصطناعي ممكن يغلط في الخط اليدوي. اتأكد من الدكتور أو الصيدلي قبل ما تاخد أي دواء.</small>
-  ${r.map((x, i) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:6px 0"><span><b>${esc(x.name || x.arabic)}</b> ${esc(x.strength || '')}${x.arabic && x.name ? ' · ' + esc(x.arabic) : ''}<br><small>${esc(x.dose || '')}${x.confidence < .6 ? ' · مش واضح' : ''}${x.ok ? '' : ' · مش لاقيه في القاعدة'}</small></span><button onclick="rxGo(${i})">ابحث</button></div>`).join('')}</div>`;
+  ${r.map((x, i) => `<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:6px 0"><span><b>${esc(x.name || x.arabic)}</b> ${esc(x.strength || '')}${x.arabic && x.name ? ' · ' + esc(x.arabic) : ''}<br><small>${esc(x.dose || '')}${x.generic ? ' · المادة الفعالة: ' + esc(x.generic) : ''}${x.confidence < .6 ? ' · مش واضح' : ''}${x.ok ? (x.via ? ' · بحثت بالمادة الفعالة' : '') : ' · مش لاقيه في القاعدة'}</small></span><button onclick="rxGo(${i})">ابحث</button></div>`).join('')}</div>`;
 const rxGo = i => { const keep = ocrC.rx; q = keep[i].q; pin = null; ocrC = []; ocrC.rx = keep; refresh(); };
 
 // ===== القراءة بالذكاء الاصطناعي (Gemini): مباشرة بمفتاح، أو عن طريق سيرفرك (الأفضل: المفتاح مش ظاهر) =====
-const AI_PROMPT = 'You are helping an Egyptian pharmacy app. The photo shows a medicine box, a medicine strip/blister, or a handwritten doctor prescription (Arabic and/or English; messy handwriting is common). List every medicine you can identify. Use context (typical Egyptian brand and generic names, dosage patterns like "1x3", abbreviations like tab, cap, syr, amp) to decode unclear handwriting; give your best guess and lower the confidence when unsure. Do not invent medicines that are not written in the image. Ignore patient and doctor personal details. Reply with JSON only: {"type":"box|strip|prescription","items":[{"name":"brand or generic name in English letters","arabic":"name in Arabic if written, else empty","strength":"e.g. 500 mg, or empty","dose":"dosing instruction translated to Arabic, or empty","confidence":0.0}]}';
+const AI_PROMPT = "You are helping an Egyptian pharmacy app. The photo shows a medicine box, a medicine strip/blister pack (foil, small, reflective or embossed text), or a handwritten doctor prescription (Arabic and/or English; messy handwriting is common). Read the text carefully, including small printed text. List every medicine you can identify. Use context (typical Egyptian brand and generic names, dosage patterns like \"1x3\", abbreviations like tab, cap, syr, amp) to decode unclear handwriting; give your best guess and lower the confidence when unsure. If the generic (active ingredient) name is printed, return it too. Do not invent medicines that are not written in the image. Ignore patient and doctor personal details. Reply with JSON only: {\"type\":\"box|strip|prescription\",\"items\":[{\"name\":\"brand name exactly as printed, in English letters\",\"arabic\":\"name in Arabic if written, else empty\",\"generic\":\"active ingredient if printed or obvious, else empty\",\"strength\":\"e.g. 500 mg, or empty\",\"dose\":\"dosing instruction translated to Arabic, or empty\",\"confidence\":0.0}]}";
 async function aiItems(b64) {
   if (GEMINI_KEY) {
     const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', { method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key':GEMINI_KEY }, body:JSON.stringify({ contents:[{ parts:[{ text:AI_PROMPT }, { inline_data:{ mime_type:'image/jpeg', data:b64 } }] }], generationConfig:{ temperature:0, responseMimeType:'application/json' } }) });
@@ -562,17 +562,21 @@ async function aiItems(b64) {
 async function ocrAI(f) {
   vm('بقرا الصورة بالذكاء الاصطناعي… (ممكن ياخد ثواني)');
   try {
-    const img = await createImageBitmap(f), sc = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+    const img = await createImageBitmap(f), sc = Math.min(1, 2048 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
     cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
     let items;
-    try { items = await aiItems(cv.toDataURL('image/jpeg', .85).split(',')[1]); }
+    try { items = await aiItems(cv.toDataURL('image/jpeg', .9).split(',')[1]); }
     catch (e) { vm('القراءة بالذكاء الاصطناعي مش متاحة (' + (e.message || e) + ')، بجرّب القراءة العادية…'); return false; }
     if (items === null) return null;
     items = items.filter(x => x.name || x.arabic).slice(0, 12);
     if (!items.length) { vm('الذكاء الاصطناعي معرفش يقرا أدوية، بجرّب القراءة العادية…'); return false; }
-    items.forEach(x => { const c = ocrCands((x.name || '') + ' ' + (x.arabic || '')); x.q = c.length ? c[0].k : (x.name || x.arabic); x.ok = c.length > 0; });
+    items.forEach(x => {
+      const ex = ocrCands((x.name || '') + ' ' + (x.arabic || '')).find(k => k.sc == 1);
+      x.q = ex ? ex.k : (x.name || x.arabic || x.generic); x.ok = !!ex || (find(x.q).length > 0 && lastBest >= .85);
+      if (!x.ok && x.generic && find(x.generic).length) { x.q = x.generic; x.ok = true; x.via = 1; }
+    });
     q = items[0].q; pin = null; ocrC = []; ocrC.rx = items; await refresh();
-    vm('قريت ' + items.length + ' دواء. اضغط "ابحث" جنب أي واحد.');
+    vm('🤖 قراءة الذكاء الاصطناعي: قريت ' + items.length + ' دواء. اضغط "ابحث" جنب أي واحد، وراجع الأسماء.');
     return true;
   } catch (e) { vm('حصل خطأ: ' + (e.message || e)); return false; }
 }
@@ -630,13 +634,15 @@ async function ocrTess(f) {
       return vm('معرفتش أقرا اسم دواء من الصورة. صوّر الشريط من قريب (الاسم يملا الصورة) ومن غير لمعان، أو اكتب الاسم أو استخدم الصوت.' + (seen ? ' — اللي اتقرا: «' + seen + '»' : ' — مفيش أي نص اتقرا.'));
     }
     q = ocrC[0].k; pin = null; await refresh();
-    vm('لقيت في الصورة: ' + ocrC.map(c => c.k).join('، ') + (ocrC.length > 1 ? ' — اختار الاسم الصح من فوق.' : ''));
+    vm('🔤 قراءة عادية' + (aiOff ? ' (الذكاء الاصطناعي مش شغّال على السيرفر: مفيش مفتاح Gemini)' : '') + ': لقيت ' + ocrC.map(c => c.k).join('، ') + (ocrC.length > 1 ? ' — اختار الاسم الصح من فوق.' : ''));
   } catch (e) { vm('حصل خطأ في قراءة الصورة: ' + (e.message || e)); }
   finally { try { if (w) await w.terminate(); } catch (_) {} }
 }
+let aiOff = false;
 async function ocr(f) {
   if (!f) return;
-  if (GEMINI_KEY || PUSH_URL) { const r = await ocrAI(f); if (r === true) return; }
+  aiOff = false;
+  if (GEMINI_KEY || PUSH_URL) { const r = await ocrAI(f); if (r === true) return; aiOff = r === null; }
   return ocrTess(f);
 }
 
