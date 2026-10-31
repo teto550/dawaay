@@ -28,7 +28,12 @@ service cloud.firestore {
     match /reservations/{id} {
       allow read: if signed() && (resource.data.p == request.auth.uid || resource.data.c == request.auth.uid);
       allow create: if signed() && request.resource.data.c == request.auth.uid;
-      allow update: if signed() && resource.data.p == request.auth.uid;
+      // الصيدلية تأكد أو ترفض. والعميل يقدر يلغي حجزه هو بس (يغيّر خانة الحالة وبس)
+      allow update: if signed() && (
+        resource.data.p == request.auth.uid ||
+        (resource.data.c == request.auth.uid && request.resource.data.s == 'cancelled'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['s']))
+      );
     }
     // الباركود: أي مسجّل يقرا ويضيف
     match /barcodes/{code} {

@@ -144,7 +144,7 @@ const LS = 'dawaay_v1', CN = { ph:'pharmacies', inv:'inventory', res:'reservatio
 let S = { ph:[], inv:[], res:[], cu:[], bc:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 10, openOnly = true, useRad = false, lastRes = [];
 let loc = JSON.parse(localStorage.getItem('dv_loc') || '[30.0444,31.2357]');
 let my = localStorage.getItem('dv_my');
-let user = null, fa = null, am = 'in', pend = null;
+let user = null, fa = null, am = 'in', pend = null, phAt = 0, editPh = false, updSeq = 0;
 
 // ===== طبقة البيانات: Firestore لو الإعدادات موجودة، وإلا localStorage =====
 function seed() {
@@ -155,25 +155,59 @@ function seed() {
 }
 async function load() {
   if (fs) {
-    const g = async (k, qy) => (await fs.getDocs(qy || fs.collection(fs.db, CN[k]))).docs.map(d => ({ ...d.data(), id:d.id })), u = user.uid;
-    S = { ph:await g('ph'), inv:await g('inv'), bc:await g('bc'), cu:[], res:[] };
+    const u = user.uid, g = async qy => (await fs.getDocs(qy)).docs.map(d => ({ ...d.data(), id:d.id }));
+    const qf = (c, f) => fs.query(fs.collection(fs.db, c), fs.where(f, '==', u));
     let r = await fs.getDoc(fs.doc(fs.db, 'users', u));
     if (!r.exists() && pend) { await fs.setDoc(fs.doc(fs.db, 'users', u), { role:pend }); r = await fs.getDoc(fs.doc(fs.db, 'users', u)); }
     pend = null; role = r.exists() ? r.data().role : null;
-    my = S.ph.find(x => x.id == u) ? u : null;
-    const rq = f => fs.query(fs.collection(fs.db, 'reservations'), fs.where(f, '==', u));
-    if (role == 'h') S.res = await g('res', rq('p'));
-    if (role == 'p') {
+    S.cu = []; S.res = [];
+    if (role == 'h') {
+      const o = await fs.getDoc(fs.doc(fs.db, 'pharmacies', u)); // الصيدلية محتاجة بياناتها هي بس
+      S.ph = o.exists() ? [{ ...o.data(), id:u }] : [];
+      S.inv = await g(qf('inventory', 'p')); S.res = await g(qf('reservations', 'p'));
+      S.inv.forEach(i => { if (!i.g && drug(i.d)) { i.g = ingKey(drug(i.d)[3]); if (i.g) fs.setDoc(fs.doc(fs.db, 'inventory', i.id), i); } }); // تحديث الأصناف القديمة (مفتاح البدائل)
+    } else if (role == 'p') {
+      await ensurePh();
       const c = await fs.getDoc(fs.doc(fs.db, 'customers', u));
       if (c.exists()) S.cu = [{ ...c.data(), id:u }];
-      S.res = await g('res', rq('c'));
+      S.res = await g(qf('reservations', 'c'));
     }
+    my = S.ph.find(x => x.id == u) ? u : null;
   } else {
     const s = localStorage.getItem(LS);
     S = { cu:[], bc:[], ...(s ? JSON.parse(s) : seed()) };
     localStorage.setItem(LS, JSON.stringify(S));
   }
   if (S.inv.some(wid) || S.cu.some(c => normMeds(c.meds).some(wid))) await loadWorld();
+}
+// ===== قراءات Firestore الموفّرة: نجيب بس اللي محتاجينه =====
+const qInv = async (f, v) => (await fs.getDocs(fs.query(fs.collection(fs.db, 'inventory'), fs.where(f, '==', v)))).docs.map(d => ({ ...d.data(), id:d.id }));
+async function ensurePh() {
+  if (!fs || (S.ph.length && Date.now() - phAt < 600000)) return;
+  S.ph = (await fs.getDocs(fs.collection(fs.db, 'pharmacies'))).docs.map(d => ({ ...d.data(), id:d.id })); phAt = Date.now();
+}
+async function ensureInv(id) { // مخزون دواء واحد (طازة في كل بحث)
+  if (!fs) return;
+  const rows = await qInv('d', id); S.inv = S.inv.filter(i => i.d != id).concat(rows);
+  if (rows.some(wid)) await loadWorld();
+}
+async function ensureAlt(d) { // البدائل بنفس المادة الفعالة
+  const g = ingKey(d[3]); if (!fs || !g) return;
+  const rows = await qInv('g', g); S.inv = S.inv.filter(i => i.g != g).concat(rows);
+  if (rows.some(wid)) await loadWorld();
+}
+async function loadRes() {
+  if (!fs || !user) return;
+  S.res = (await fs.getDocs(fs.query(fs.collection(fs.db, 'reservations'), fs.where(role == 'h' ? 'p' : 'c', '==', user.uid)))).docs.map(d => ({ ...d.data(), id:d.id }));
+}
+async function bcGet(c) { // الباركود بيتجاب لما نحتاجه، مش كله
+  const k = bcn(c), m = S.bc.find(x => bcn(x.id) == k); if (m) return m.d;
+  if (!fs) return null;
+  for (const id of [String(c), k, '0' + k]) {
+    const r = await fs.getDoc(fs.doc(fs.db, 'barcodes', id));
+    if (r.exists()) { S.bc.push({ id, d:r.data().d }); return r.data().d; }
+  }
+  return null;
 }
 async function put(k, o) {
   if (!o.id) o.id = k + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
@@ -248,11 +282,14 @@ function alts(d) {
     ? `<h3>بدائل بنفس المادة الفعالة (${esc(d[3])})</h3>` + r.map(x => card(x, 1)).join('')
     : `<p class="muted">مفيش بدائل متوفرة دلوقتي. جرّب تلغي «المفتوحة دلوقتي بس» أو تكبّر القطر.</p>`;
 }
-function results() {
+function cands() {
   let m = find(q);
   if (weak(m) && WD.length) m = [...find(q, true).slice(0, 5), ...m.slice(0, 3)];
   if (pin && drug(pin)) { m = [drug(pin), ...m.filter(x => x[0] != pin)].slice(0, 8); sel = pin; }
   if (!m.length) sel = null; else if (!m.find(d => d[0] == sel)) sel = m[0][0];
+  return m;
+}
+function results(m = cands()) {
   lastRes = [];
   let h = '';
   if (ocrC.length) h += `<div class="card"><b>اللي اتقرا من الصورة:</b><div class="chips">${ocrC.map(c => `<span class="chip ${c.k == norm(q) ? 'on' : ''}" onclick="q='${c.k}';pin=null;refresh()">${esc(c.t)}</span>`).join('')}</div></div>`;
@@ -265,11 +302,17 @@ function results() {
   }
   return h;
 }
-const updRes = () => {
+const updRes = async () => {
   const e = $('#res'); if (!e) return;
   const qi = $('#q'); if (qi) qi.value = q;
   const lc = $('#lc'); if (lc) lc.textContent = 'موقعك: ' + loc.map(x => x.toFixed(3)).join('، ');
-  e.innerHTML = results(); markers();
+  const m = cands(), seq = ++updSeq;
+  if (fs && sel) {
+    try { await ensurePh(); await ensureInv(sel); const d = drug(sel); if (d && !avail(sel).length) await ensureAlt(d); }
+    catch (err) { console.warn('inventory load failed', err); }
+    if (seq != updSeq) return; // اتغيّر البحث وإحنا بنحمّل
+  }
+  e.innerHTML = results(m); markers();
 };
 function search() {
   return `<div class="card"><div class="row"><input id="q" placeholder="اسم الدواء (حتى لو فيه غلط إملائي)" value="${esc(q)}" onkeydown="if(event.key=='Enter'){q=this.value;pin=null;ocrC=[];refresh()}">
@@ -280,7 +323,7 @@ function search() {
   <label><input type="checkbox" ${useRad?'checked':''} onchange="useRad=this.checked;render()">حدّد قطر البحث حول موقعي (على الخريطة)</label>
   ${useRad ? `<div id="map" style="height:280px;border-radius:10px;margin:6px 0"></div><label>القطر: <b id="rv">${rad}</b> كم<input type="range" min="1" max="100" value="${rad}" oninput="setRad(+this.value)"></label><small>اسحب الدبوس 📍 أو اضغط على الخريطة لتغيير موقعك.</small>` : ''}
   <div class="row" style="justify-content:space-between"><small id="lc">موقعك: ${loc.map(x => x.toFixed(3)).join('، ')}</small><button class="sec" onclick="gps()">حدد موقعي</button></div></div>
-  <div id="res">${results()}</div>`;
+  <div id="res">${fs && q ? '<p class="muted">جاري البحث…</p>' : results()}</div>`;
 }
 
 // ===== الخريطة (Leaflet + OpenStreetMap) =====
@@ -366,10 +409,10 @@ const custForm = () => { const c = cd; return `${medOnly ? '<h3>إضافة دو�
 const custView = c => `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><button onclick="startEdit()">✏️ تعديل</button></div>
   <div class="meta"><span>📞 ${esc(c.phone)}</span></div><small>${esc(c.addr)}</small></div>
   <div class="row" style="justify-content:space-between;margin-top:12px"><h4 style="margin:0">أدويتي</h4><button onclick="startEdit(1)">➕ إضافة دواء</button></div>
-  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}${remTxt(m) ? `<br><small>${esc(remTxt(m))}</small><br>${doseChips(m)}` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}<div style="margin-top:14px"><button class="sec" onclick="testNotif()">🔔 جرّب الإشعار (بعد 5 ثواني)</button><small style="display:block;margin-top:6px">لو الإشعار جه من غير صوت: إعدادات الموبايل ← التطبيقات ← Chrome (أو دوائي) ← الإشعارات ← اختار تصنيف الموقع ← الأهمية Urgent أو High والصوت مش «بدون صوت»، واتأكد إن الموبايل مش صامت ولا على «عدم الإزعاج».</small></div>${normMeds(c.meds).some(m => m.rem && m.rem.on) ? '<button class="sec" style="margin-top:8px" onclick="testAlarm()">🔔 جرّب صوت المنبه</button>' : ''}`;
+  ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}${remTxt(m) ? `<br><small>${esc(remTxt(m))}</small><br>${doseChips(m)}` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}<div style="margin-top:14px"><button class="sec" onclick="testNotif()">🔔 جرّب الإشعار (بعد 5 ثواني)</button><small style="display:block;margin-top:6px">لو الإشعار جه من غير صوت: إعدادات الموبايل ← التطبيقات ← Chrome (أو دوائي) ← الإشعارات ← اختار تصنيف الموقع ← الأهمية Urgent أو High والصوت مش «بدون صوت»، واتأكد إن الموبايل مش صامت ولا على «عدم الإزعاج».</small></div>${resView()}${normMeds(c.meds).some(m => m.rem && m.rem.on) ? '<button class="sec" style="margin-top:8px" onclick="testAlarm()">🔔 جرّب صوت المنبه</button>' : ''}`;
 function patient() {
   if (!me()) { if (!cd) cd = { meds:[] }; return '<h3>سجّل بياناتك</h3>' + custForm(); }
-  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="cv='p';render()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? (medOnly ? '' : '<h3>تعديل بياناتي</h3>') + custForm() : custView(me()));
+  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="goP()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? (medOnly ? '' : '<h3>تعديل بياناتي</h3>') + custForm() : custView(me()));
 }
 async function saveCu() {
   keepC(); const c = cd, isNew = !me();
@@ -384,14 +427,14 @@ async function saveCu() {
 // ===== واجهة الصيدلية =====
 function pharm() {
   const p = S.ph.find(x => x.id == my);
-  if (!p) return `<div class="card"><h3>سجّل صيدليتك</h3>
-  <input id="n" placeholder="اسم الصيدلية"><input id="ph" type="tel" placeholder="رقم الهاتف"><input id="ad" placeholder="العنوان">
-  <div class="row"><input id="la" placeholder="خط العرض" value="${loc[0]}"><input id="lo" placeholder="خط الطول" value="${loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div>
-  <label><input type="checkbox" id="h24">شغالة 24 ساعة</label>
-  <div class="row"><input id="o" type="time" value="09:00"><input id="c" type="time" value="23:00"></div>
-  <button onclick="reg()">تسجيل الصيدلية</button></div>`;
+  if (!p || editPh) { const x = p || {}; return `<div class="card"><h3>${p ? 'تعديل بيانات الصيدلية' : 'سجّل صيدليتك'}</h3>
+  <input id="n" placeholder="اسم الصيدلية" value="${esc(x.name)}"><input id="ph" type="tel" placeholder="رقم الهاتف" value="${esc(x.phone)}"><input id="ad" placeholder="العنوان" value="${esc(x.addr)}">
+  <div class="row"><input id="la" placeholder="خط العرض" value="${x.lat ?? loc[0]}"><input id="lo" placeholder="خط الطول" value="${x.lng ?? loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div>
+  <label><input type="checkbox" id="h24" ${x.h24 ? 'checked' : ''}>شغالة 24 ساعة</label>
+  <div class="row"><input id="o" type="time" value="${x.o || '09:00'}"><input id="c" type="time" value="${x.c || '23:00'}"></div>
+  <div class="row"><button onclick="reg()">${p ? 'حفظ' : 'تسجيل الصيدلية'}</button>${p ? '<button class="sec" onclick="editPh=false;render()">إلغاء</button>' : ''}</div></div>`; }
   const inv = S.inv.filter(i => i.p == p.id && drug(i.d)), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
-  return `<div class="card"><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div>
+  return `<div class="card row" style="justify-content:space-between"><div><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div><button class="sec" onclick="editPh=true;render()">✏️ تعديل</button></div>
   <div class="card"><h3>أضف أو حدّث دواء</h3>
   <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
   <div id="rd" style="width:100%" onclick="stopCam()"></div><div id="sm"></div>
@@ -401,17 +444,17 @@ function pharm() {
   <small>لو الدواء مش شرايط (شراب أو حقن...) سيب "شرايط في العلبة" = 1.</small>
   <button onclick="addInv()">حفظ</button></div>
   <h3>المخزون (${inv.length})</h3>
-  ${inv.map(i => { const sp = i.sp || 1, k = i.id; return `<div class="card"><b>${esc(dn(i.d))}</b><div class="meta"><span>المتاح: <b>${stockTxt(i)}</b></span></div>
+  ${inv.map(i => { const sp = i.sp || 1, k = i.id; return `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(dn(i.d))}</b><button class="sec" onclick="delInv('${k}')" aria-label="مسح">🗑</button></div><div class="meta"><span>المتاح: <b>${stockTxt(i)}</b></span></div>
     <div class="row" style="flex-wrap:wrap"><label class="mini">علب<input id="b_${k}" type="number" min="0" value="${Math.floor(i.q / sp)}" onchange="upd2('${k}')"></label><label class="mini">شرايط زيادة<input id="l_${k}" type="number" min="0" value="${i.q % sp}" onchange="upd2('${k}')"></label><label class="mini">شرايط/علبة<input id="s_${k}" type="number" min="1" value="${sp}" onchange="upd2('${k}')"></label><label class="mini">سعر العلبة<input type="number" min="0" step="0.5" value="${i.pr}" onchange="upd('${k}','pr',this.value)"></label></div></div>`; }).join('') || '<p class="muted">لسه مفيش أدوية. ضيف أول دواء من فوق.</p>'}
-  <h3>طلبات الحجز (${rs.length})</h3>
-  ${rs.map(r => `<div class="card row" style="justify-content:space-between"><span>${esc(dn(r.d))} — ${esc(r.n)} <small>${esc(r.t)}</small><br><small>المطلوب: <b>${resTxt(r)}</b></small></span>${r.s=='pending'?`<button onclick="conf('${r.id}')">أكّد</button>`:'<span class="tag">متأكد</span>'}</div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
+  <div class="row" style="justify-content:space-between"><h3>طلبات الحجز (${rs.length})</h3><button class="sec" onclick="loadRes().then(render)">تحديث</button></div>
+  ${rs.map(r => `<div class="card"><span>${esc(dn(r.d))} — ${esc(r.n)} <small>${esc(r.t)}</small><br><small>المطلوب: <b>${resTxt(r)}</b></small></span><div class="row" style="margin-top:6px">${r.s == 'pending' ? `<button onclick="conf('${r.id}')">أكّد</button><button class="sec" onclick="rej('${r.id}')">مش متوفر</button>` : `<span class="tag ${r.s == 'confirmed' ? '' : 'x'}">${STT[r.s] || esc(r.s)}</span>`}</div></div>`).join('') || '<p class="muted">مفيش طلبات حجز.</p>'}`;
 }
 
 // ===== الأحداث =====
 async function reg() {
-  const v = i => $('#'+i).value.trim(), o = { ...(user ? { id:user.uid } : {}), name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), h24:$('#h24').checked, o:v('o'), c:v('c') };
+  const cur = S.ph.find(x => x.id == my), v = i => $('#'+i).value.trim(), o = { ...(cur ? { id:cur.id } : {}), ...(user ? { id:user.uid } : {}), name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), h24:$('#h24').checked, o:v('o'), c:v('c') };
   if (!o.name || !o.phone || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والهاتف والموقع.');
-  my = (await put('ph', o)).id; localStorage.setItem('dv_my', my); render();
+  my = (await put('ph', o)).id; localStorage.setItem('dv_my', my); editPh = false; render();
 }
 async function addInv() {
   const d = selD, sp = Math.max(1, parseInt($('#sp').value) || 1), qv = (parseInt($('#qq').value) || 0) * sp + (parseInt($('#ls').value) || 0), pr = parseFloat($('#pr').value);
@@ -419,7 +462,7 @@ async function addInv() {
   if ((!$('#qq').value && !$('#ls').value) || !(pr >= 0)) return alert('اكتب عدد العلب (أو الشرايط) وسعر العلبة.');
   const bc = $('#bc').value.trim();
   if (bc) await put('bc', { id:bc, d });
-  await put('inv', { id:my+'_'+d, p:my, d, q:qv, sp, pr }); selD = null; render();
+  await put('inv', { id:my+'_'+d, p:my, d, q:qv, sp, pr, g:ingKey(drug(d)[3]) }); selD = null; render();
 }
 let selD = null, dt, h5 = null;
 const dsearch = v => { clearTimeout(dt); dt = setTimeout(async () => { let r = find(v); if (weak(r)) { await loadWorld(); if (WD.length) r = [...find(v, true).slice(0, 5), ...r.slice(0, 3)]; } $('#dres').innerHTML = r.map(d => `<span class="chip" onclick="pickD('${d[0]}')">${esc(d[1])} · ${esc(d[2])}</span>`).join(''); }, 250); };
@@ -431,8 +474,8 @@ function pickD(id) {
 }
 async function setBc(c) {
   $('#bc').value = c;
-  const m = S.bc.find(x => bcn(x.id) == bcn(c));
-  let id = (m && m.d) || BCS.get(bcn(c));
+  const m = await bcGet(c);
+  let id = m || BCS.get(bcn(c));
   if (!id && c && await loadWorld()) id = WBC.get(bcn(c));
   if (id && drug(id)) { pickD(id); if (!m) $('#dsel').innerHTML += ' <small>(من قاعدة الباركودات، اتأكد إنه نفس العلبة)</small>'; }
   else if (c) alert('باركود جديد. اكتب اسم الدواء واختاره من النتايج وهنفتكره المرة الجاية.');
@@ -465,6 +508,7 @@ const stockTxt = i => {
   const bx = Math.floor(i.q / sp), ls = i.q % sp;
   return (bx ? bx + ' علبة' : '') + (bx && ls ? ' + ' : '') + (ls ? ls + ' شريط' : '') + (!bx && !ls ? '0' : '') + ' (' + i.q + ' شريط)';
 };
+const STT = { pending:'بانتظار تأكيد الصيدلية', confirmed:'متأكد ✅ تقدر تروح تستلمه', rejected:'الصيدلية قالت مش متوفر', cancelled:'ملغي' };
 const resTxt = r => r.qt ? r.un + (r.ut == 'b' ? ' علبة' : ' شريط') + (r.ut == 'b' && r.qt != r.un ? ' (' + r.qt + ' شريط)' : '') : '1 علبة';
 async function reserve(p, d) {
   const m = me(), k = p + '_' + d, it = S.inv.find(x => x.id == k), sp = it.sp || 1;
@@ -475,11 +519,25 @@ async function reserve(p, d) {
   await put('res', { p, d, c:user ? user.uid : '', n:m.name, t:m.phone, qt:need, ut:u, un:n, s:'pending', at:Date.now() });
   alert('اتبعت طلب الحجز (' + n + (u == 'b' ? ' علبة' : ' شريط') + '). الصيدلية هتأكده.');
 }
+async function rej(id) { const r = S.res.find(x => x.id == id); if (!r) return; r.s = 'rejected'; await put('res', r); render(); }
+async function cancelRes(id) { const r = S.res.find(x => x.id == id); if (!r || !confirm('تلغي الحجز؟')) return; r.s = 'cancelled'; await put('res', r); render(); }
+const goP = async () => { cv = 'p'; render(); if (fs && user && role == 'p') { try { await loadRes(); } catch (e) {} render(); } };
+const resView = () => {
+  const rs = S.res.filter(r => !user || r.c == user.uid).sort((a, b) => b.at - a.at);
+  return `<div class="row" style="justify-content:space-between;margin-top:14px"><h4 style="margin:0">حجوزاتي (${rs.length})</h4><button class="sec" onclick="goP()">تحديث</button></div>` + (rs.map(r => { const p = S.ph.find(x => x.id == r.p) || {};
+    return `<div class="card"><b>${esc(dn(r.d))}</b> · ${esc(resTxt(r))}<br><small>${esc(p.name || '')}${p.phone ? ' · ' + esc(p.phone) : ''}</small><br><span class="tag ${r.s == 'rejected' || r.s == 'cancelled' ? 'x' : ''}">${STT[r.s] || esc(r.s)}</span>${r.s == 'pending' ? ` <button class="sec" onclick="cancelRes('${r.id}')">إلغاء الحجز</button>` : ''}</div>`; }).join('') || '<p class="muted">مفيش حجوزات.</p>');
+};
 async function conf(id) {
   const r = S.res.find(x => x.id == id), i = S.inv.find(x => x.id == r.p + '_' + r.d), need = r.qt || 1;
   if (i && i.q < need && !confirm('المخزون (' + stockTxt(i) + ') أقل من المطلوب. تأكّد برضه؟')) return;
   r.s = 'confirmed'; await put('res', r);
   if (i) { i.q = Math.max(0, i.q - need); await put('inv', i); }
+  render();
+}
+async function delInv(id) {
+  const i = S.inv.find(x => x.id == id); if (!i || !confirm('تمسح ' + dn(i.d) + ' من المخزون؟')) return;
+  S.inv = S.inv.filter(x => x.id != id);
+  if (fs) await fs.deleteDoc(fs.doc(fs.db, 'inventory', id)); else localStorage.setItem(LS, JSON.stringify(S));
   render();
 }
 async function upd2(id) {
@@ -647,8 +705,8 @@ async function ocr(f) {
 }
 
 async function scanQ(c) {
-  const m = S.bc.find(x => bcn(x.id) == bcn(c));
-  let id = (m && m.d) || BCS.get(bcn(c));
+  const m = await bcGet(c);
+  let id = m || BCS.get(bcn(c));
   if (!id && await loadWorld()) id = WBC.get(bcn(c));
   if (id && drug(id)) { q = drug(id)[2]; pin = id; ocrC = []; await refresh(); vm('اتعرّفنا على العلبة من الباركود.'); }
   else vm('الباركود ده مش متسجل عندنا. صوّر اسم الدواء (علبة/شريط) أو اكتب الاسم.');
@@ -738,7 +796,12 @@ async function install() {
     : 'على أندرويد: اضغط على النقاط التلاتة (⋮) فوق في كروم ثم "تثبيت التطبيق" أو "إضافة إلى الشاشة الرئيسية".\nولو مش ظاهرة، اقفل الصفحة وافتحها تاني بعد ثواني.');
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-const refresh = async () => { try { if (fs) await load(); if (role == 'p' && q && weak(find(q))) await loadWorld(); } catch (e) {} if (role == 'p' && cv == 's' && me() && $('#res')) updRes(); else render(); };
+const refresh = async () => {
+  try { if (role == 'p' && q && weak(find(q))) await loadWorld(); } catch (e) {}
+  if (role == 'p' && cv == 's' && me() && $('#res')) return updRes();
+  try { if (fs) await load(); } catch (e) {}
+  render();
+};
 const pick = async r => { role = r; if (fs && user) await fs.setDoc(fs.doc(fs.db, 'users', user.uid), { role:r }); else localStorage.setItem('dv_role', r); await refresh(); };
 const logout = () => { q = ''; cd = null; editP = false; cv = 's'; if (fs) return fa.out(fs.auth); role = null; localStorage.removeItem('dv_role'); render(); };
 const errMsg = c => ({ 'auth/invalid-credential':'الإيميل أو الباسورد غلط', 'auth/wrong-password':'الإيميل أو الباسورد غلط', 'auth/user-not-found':'الإيميل أو الباسورد غلط', 'auth/email-already-in-use':'الإيميل ده مسجل قبل كده', 'auth/weak-password':'الباسورد ضعيف (6 حروف على الأقل)', 'auth/invalid-email':'الإيميل مش مكتوب صح', 'auth/network-request-failed':'مفيش اتصال بالإنترنت' }[c] || 'حصل خطأ: ' + c);
@@ -754,7 +817,11 @@ const authScreen = () => `<div class="auth"><div class="hero"><div class="logo">
     <div class="rc ${arole=='h'?'on':''}" onclick="setRole('h')"><span>🏥</span><b>صيدلية</b><small>بعرض أدويتي</small></div></div>` : ''}
   <label class="lbl" for="em">الإيميل</label><input id="em" type="email" inputmode="email" placeholder="name@example.com" autocomplete="email" value="${esc(ae)}">
   <label class="lbl" for="pw">الباسورد</label><div class="pw"><input id="pw" type="${showPw?'text':'password'}" placeholder="${am=='up'?'6 حروف على الأقل':'الباسورد'}" autocomplete="${am=='in'?'current-password':'new-password'}" value="${esc(ap)}" onkeydown="if(event.key=='Enter')doAuth()"><button class="sec eye" type="button" onclick="togglePw()">${showPw?'إخفاء':'إظهار'}</button></div>
-  <button class="big" onclick="doAuth()">${am == 'in' ? 'دخول' : 'إنشاء الحساب'}</button></div></div>`;
+  <button class="big" onclick="doAuth()">${am == 'in' ? 'دخول' : 'إنشاء الحساب'}</button>${am == 'in' ? '<button class="sec" style="width:100%;margin-top:8px" onclick="doReset()">نسيت الباسورد؟</button>' : ''}</div></div>`;
+async function doReset() {
+  const em = $('#em').value.trim(); if (!em) return alert('اكتب إيميلك الأول.');
+  try { await fa.reset(fs.auth, em); alert('بعتنالك لينك تغيير الباسورد على إيميلك (شوف الـ Spam كمان).'); } catch (e) { alert(errMsg(e.code)); }
+}
 async function doAuth() {
   const em = $('#em').value.trim(), pw = $('#pw').value;
   if (!em || !pw) return alert('اكتب الإيميل والباسورد.');
@@ -770,6 +837,7 @@ function render() {
   $('#app').innerHTML = (fs ? '' : '<div class="demo">وضع تجريبي: البيانات محفوظة في متصفحك. املا FIREBASE_CONFIG لتشغيل قاعدة البيانات الحقيقية.</div>') + (fs && !user ? authScreen() : !role ? entry() : role == 'p' ? patient() : pharm());
   $('#out').hidden = fs ? !user : !role;
   initMap();
+  if (fs && role == 'p' && cv == 's' && q && $('#res')) updRes();
 }
 (async () => {
   try {
@@ -777,12 +845,12 @@ function render() {
     if (FIREBASE_CONFIG.apiKey) {
       const B = 'https://www.gstatic.com/firebasejs/10.12.2/', [a, b, c] = await Promise.all([import(B + 'firebase-app.js'), import(B + 'firebase-firestore.js'), import(B + 'firebase-auth.js')]);
       const app = a.initializeApp(FIREBASE_CONFIG);
-      fs = { db:b.getFirestore(app), auth:c.getAuth(app), collection:b.collection, getDocs:b.getDocs, getDoc:b.getDoc, setDoc:b.setDoc, doc:b.doc, query:b.query, where:b.where };
-      fa = { signIn:c.signInWithEmailAndPassword, signUp:c.createUserWithEmailAndPassword, out:c.signOut };
+      fs = { db:b.getFirestore(app), auth:c.getAuth(app), collection:b.collection, getDocs:b.getDocs, getDoc:b.getDoc, setDoc:b.setDoc, deleteDoc:b.deleteDoc, doc:b.doc, query:b.query, where:b.where };
+      fa = { signIn:c.signInWithEmailAndPassword, signUp:c.createUserWithEmailAndPassword, out:c.signOut, reset:c.sendPasswordResetEmail };
       c.onAuthStateChanged(fs.auth, async u => {
         user = u;
         if (u) { try { await load(); } catch (e) { alert('خطأ في تحميل البيانات: ' + e.message); } if (role == 'p' && me()) { syncPush(me().meds); syncNative(me().meds); } }
-        else { role = null; my = null; S = { ph:[], inv:[], res:[], cu:[], bc:[] }; }
+        else { role = null; my = null; phAt = 0; editPh = false; S = { ph:[], inv:[], res:[], cu:[], bc:[] }; }
         render();
       });
       return;
