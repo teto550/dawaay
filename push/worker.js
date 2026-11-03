@@ -124,6 +124,36 @@ async function read(req, env) {
   } catch (e) { return jres({ error: 'bad ai reply' }, 502); }
 }
 
+// ===== المساعد الصحي (Gemini): بيقترح أدوية شائعة من غير روشتة وبيحوّل للدكتور =====
+const CHAT_SYS = 'You are "Dawaay", a pharmacy helper assistant inside an Egyptian pharmacy-finder app. You are NOT a doctor and you never diagnose. Reply in simple Egyptian Arabic. Goal: when the user describes a symptom, (1) check safety, (2) suggest common over-the-counter options by ACTIVE INGREDIENT with typical Egyptian brand examples, (3) say when to see a doctor. Rules: - If key information is missing for safety (age, pregnancy or breastfeeding, chronic diseases such as asthma, ulcer, kidney, liver, heart, high blood pressure or diabetes, allergies, how long the symptom has lasted), ask at most 2 short questions first and return an empty suggestions list. - Suggest only over-the-counter, commonly used symptomatic medicines. Never suggest antibiotics, steroids, sedatives, opioids or any prescription-only medicine; say that a doctor must decide those. - Do not give exact doses; say to follow the leaflet or ask the pharmacist. For babies and children under 12 only advise seeing a doctor or pharmacist for the dose. - Use the current_medicines list, if given, to warn about interactions or duplicate ingredients (for example two products containing paracetamol). - Red flags (set urgent=true, advise a doctor or emergency, ambulance 123, and give no medicine suggestions): chest pain, trouble breathing, fainting, confusion, stroke signs, severe or worsening abdominal pain, vomiting blood or black stool, swelling of the face or severe allergic reaction, fever above 39.5C or fever lasting more than 3 days, fever in a baby under 3 months, severe headache with stiff neck or after a head injury, any concerning symptom in pregnancy, suicidal thoughts, symptoms lasting more than a week. - Always end the reply with one short sentence saying this is guidance only and a doctor or pharmacist should confirm. Reply with JSON only: {"reply":"text in Egyptian Arabic","urgent":false,"suggestions":[{"ingredient":"English active ingredient name","brands":["up to 3 Egyptian brand names in English"],"note":"short Arabic note: what it helps with and the key caution"}]}';
+
+async function chat(req, env) {
+  if (!env.GEMINI_API_KEY) return jres({ error: 'not configured' }, 501);
+  const raw = await req.text(); if (raw.length > 30000) return jres({ error: 'too big' }, 413);
+  let b; try { b = JSON.parse(raw); } catch (e) { return jres({ error: 'bad json' }, 400); }
+  const msgs = (Array.isArray(b.messages) ? b.messages : []).slice(-12).filter(m => m && (m.r === 'u' || m.r === 'b') && typeof m.t === 'string').map(m => ({ r: m.r, t: m.t.slice(0, 1000) }));
+  if (!msgs.length || msgs[msgs.length - 1].r !== 'u') return jres({ error: 'bad messages' }, 400);
+  while (msgs.length && msgs[0].r !== 'u') msgs.shift();
+  const meds = (Array.isArray(b.meds) ? b.meds : []).filter(x => typeof x === 'string').slice(0, 20).map(x => x.slice(0, 100));
+  const hr = Math.floor(Date.now() / 3600000), key = 'c|' + (req.headers.get('CF-Connecting-IP') || 'x') + '|' + hr;
+  await env.DB.prepare('INSERT INTO rl (k, hr, n) VALUES (?1, ?2, 1) ON CONFLICT(k) DO UPDATE SET n = n + 1').bind(key, hr).run();
+  const row = await env.DB.prepare('SELECT n FROM rl WHERE k = ?1').bind(key).first();
+  if (row && row.n > (+env.CHAT_LIMIT || 60)) return jres({ error: 'limit' }, 429);
+  const model = env.GEMINI_MODEL || 'gemini-flash-latest';
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify({
+    systemInstruction: { parts: [{ text: CHAT_SYS + (meds.length ? '\ncurrent_medicines: ' + meds.join('; ') : '') }] },
+    contents: msgs.map(m => ({ role: m.r === 'u' ? 'user' : 'model', parts: [{ text: m.t }] })),
+    generationConfig: { temperature: 0.3, responseMimeType: 'application/json' } }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return jres({ error: (j.error && j.error.message) || 'ai error' }, r.status === 429 ? 429 : 502);
+  try {
+    const txt = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
+    const o = JSON.parse(txt.replace(/```json|```/g, ''));
+    const sug = (Array.isArray(o.suggestions) ? o.suggestions : []).slice(0, 4).filter(x => x && typeof x.ingredient === 'string').map(x => ({ ingredient: x.ingredient.slice(0, 80), brands: (Array.isArray(x.brands) ? x.brands : []).filter(y => typeof y === 'string').slice(0, 3).map(y => y.slice(0, 40)), note: typeof x.note === 'string' ? x.note.slice(0, 300) : '' }));
+    return jres({ reply: String(o.reply || '').slice(0, 2500), urgent: !!o.urgent, suggestions: o.urgent ? [] : sug });
+  } catch (e) { return jres({ error: 'bad ai reply' }, 502); }
+}
+
 const cors = env => ({ 'Access-Control-Allow-Origin': env.ALLOW_ORIGIN, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
 const num = (v, lo, hi) => Number.isFinite(+v) && +v >= lo && +v <= hi;
 
@@ -148,9 +178,9 @@ export default {
   async fetch(req, env) {
     const u = new URL(req.url), h = cors(env);
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
-    if (req.method === 'POST' && (u.pathname === '/sync' || u.pathname === '/ack' || u.pathname === '/read')) {
+    if (req.method === 'POST' && (u.pathname === '/sync' || u.pathname === '/ack' || u.pathname === '/read' || u.pathname === '/chat')) {
       if (req.headers.get('Origin') !== env.ALLOW_ORIGIN) return new Response('forbidden', { status: 403, headers: h });
-      const r = await (u.pathname === '/ack' ? ack(req, env) : u.pathname === '/read' ? read(req, env) : sync(req, env)); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
+      const r = await (u.pathname === '/ack' ? ack(req, env) : u.pathname === '/read' ? read(req, env) : u.pathname === '/chat' ? chat(req, env) : sync(req, env)); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
       return new Response(r.body, { status: r.status, headers: hh });
     }
     return new Response('dawaay push worker: ok');

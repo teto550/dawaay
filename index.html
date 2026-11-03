@@ -46,6 +46,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 h3,h4{margin:14px 0 4px}
 small{color:var(--mut)}
 #map{position:relative;z-index:0}
+.bub{padding:10px 12px;border-radius:12px;margin:8px 0;max-width:94%}
+.bub.u{background:#d9f0e4;margin-inline-start:auto}.bub.b{background:#fff;border:1px solid var(--line)}
+.urg{background:#fde2de;border:1px solid #f1b0a8;color:#7a1710;padding:10px;border-radius:10px;margin:0 0 8px;font-weight:600}
 #alarm{position:fixed;inset:0;background:var(--teal);z-index:100;display:grid;place-items:center;padding:20px}#alarm[hidden]{display:none}
 .abox{background:#fff;border-radius:16px;padding:24px;text-align:center;width:100%;max-width:380px}
 .bell{font-size:56px;animation:sh .6s infinite}@keyframes sh{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(12deg)}}
@@ -410,9 +413,102 @@ const custView = c => `<div class="card"><div class="row" style="justify-content
   <div class="meta"><span>📞 ${esc(c.phone)}</span></div><small>${esc(c.addr)}</small></div>
   <div class="row" style="justify-content:space-between;margin-top:12px"><h4 style="margin:0">أدويتي</h4><button onclick="startEdit(1)">➕ إضافة دواء</button></div>
   ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}${remTxt(m) ? `<br><small>${esc(remTxt(m))}</small><br>${doseChips(m)}` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}<div style="margin-top:14px"><button class="sec" onclick="testNotif()">🔔 جرّب الإشعار (بعد 5 ثواني)</button><small style="display:block;margin-top:6px">لو الإشعار جه من غير صوت: إعدادات الموبايل ← التطبيقات ← Chrome (أو دوائي) ← الإشعارات ← اختار تصنيف الموقع ← الأهمية Urgent أو High والصوت مش «بدون صوت»، واتأكد إن الموبايل مش صامت ولا على «عدم الإزعاج».</small></div>${resView()}${normMeds(c.meds).some(m => m.rem && m.rem.on) ? '<button class="sec" style="margin-top:8px" onclick="testAlarm()">🔔 جرّب صوت المنبه</button>' : ''}`;
+// ===== المساعد الصحي: بيقترح أدوية شائعة من غير روشتة وبيحوّل للدكتور =====
+let chat = [], chatBusy = false, useMeds = true;
+const D2 = s => String(s).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+const hasAny = (t, a) => a.some(w => t.includes(norm(w)));
+const hasWord = (t, a) => { const ws = t.split(' '); return a.some(w => ws.includes(norm(w))); };
+// علامات خطر: أي واحدة منهم = تحويل للدكتور/الطوارئ بدون اقتراح أدوية (بتتفحص قبل أي رد)
+const RED = ['الم في الصدر', 'وجع في الصدر', 'ضيق في الصدر', 'ضغط في الصدر', 'صعوبه في التنفس', 'صعوبه في النفس', 'ضيق في التنفس', 'ضيق تنفس', 'مش قادر اتنفس', 'نهجان', 'اغماء', 'اغمي عليا', 'فقدت الوعي', 'تشنج', 'غيبوبه', 'قيء دم', 'استفراغ دم', 'بستفرغ دم', 'دم في البراز', 'براز اسود', 'دم في البول', 'نزيف', 'تورم في الوش', 'تورم الوش', 'تورم في الشفايف', 'صعوبه في البلع', 'شلل', 'تنميل في نص', 'لجلجه', 'انحراف الوش', 'تيبس في الرقبه', 'رقبتي ناشفه', 'انتحار', 'اموت نفسي', 'اقتل نفسي', 'الم شديد في البطن', 'وجع شديد في البطن', 'بطني بتوجعني جدا'];
+const SG = {
+  para: { ingredient: 'Paracetamol', brands: ['Panadol', 'Adol', 'Cetal'], note: 'للسخونية والصداع والألم الخفيف. اتبع النشرة، ومتاخدش معاه حاجة تانية فيها باراسيتامول (زي أدوية البرد المركبة). خلي بالك لو عندك مشكلة في الكبد.' },
+  ibu: { ingredient: 'Ibuprofen', brands: ['Brufen', 'Epifen'], note: 'بديل للألم والالتهاب. يتاخد بعد الأكل. مش مناسب لو حامل أو عندك قرحة معدة أو كلى أو ربو أو ضغط من غير ما تسأل الدكتور.' },
+  ceti: { ingredient: 'Cetirizine', brands: ['Zyrtec'], note: 'للحساسية والرشح والعطس والهرش. ممكن يسبب نعاس.' },
+  lora: { ingredient: 'Loratadine', brands: ['Claritin'], note: 'مضاد حساسية، النعاس فيه أقل غالبًا.' },
+  nasal: { ingredient: 'Xylometazoline nasal spray', brands: ['Otrivin'], note: 'لاحتقان الأنف لمدة قصيرة (مش أكتر من 5 أيام). مش مناسب لو عندك ضغط أو قلب من غير استشارة.' },
+  loz: { ingredient: 'Throat lozenges', brands: ['Strepsils'], note: 'أقراص مص لالتهاب الحلق. لو معاه سخونية عالية أو صعوبة في البلع روح للدكتور.' },
+  dxm: { ingredient: 'Dextromethorphan', brands: [], term: 'dextromethorphan', note: 'للكحة الناشفة للكبار بس. مش مع أدوية الاكتئاب من غير دكتور، وللأطفال اسأل الدكتور.' },
+  amb: { ingredient: 'Ambroxol', brands: ['Mucosolvan'], note: 'بيساعد على إذابة البلغم. اشرب سوائل كتير.' },
+  antac: { ingredient: 'Aluminium / Magnesium antacid', brands: ['Maalox', 'Gaviscon'], note: 'للحموضة والحرقان. لو بيتكرر كتير أو معاه وجع شديد روح للدكتور.' },
+  hyo: { ingredient: 'Hyoscine butylbromide', brands: ['Buscopan'], note: 'لمغص التقلصات. مش لمرضى الجلوكوما أو تضخم البروستاتا. ولو المغص شديد أو معاه سخونية روح للدكتور.' },
+  simet: { ingredient: 'Simethicone', brands: [], term: 'simethicone', note: 'للغازات والانتفاخ.' },
+  ors: { ingredient: 'Oral rehydration salts (ORS)', brands: [], term: 'ORS', note: 'أهم حاجة في الإسهال والقيء: تعويض السوائل والأملاح.' },
+  lop: { ingredient: 'Loperamide', brands: ['Imodium'], note: 'بيوقف الإسهال. مش للأطفال، ومش لو فيه دم أو سخونية عالية.' },
+  lact: { ingredient: 'Lactulose', brands: ['Duphalac'], note: 'للإمساك. أكتر ألياف وسوائل بتساعد كمان.' },
+  diclo: { ingredient: 'Diclofenac gel', brands: ['Voltaren'], note: 'جل موضعي لوجع العضلات والمفاصل (على الجلد السليم بس).' },
+};
+const SYM = [
+  { t: 'سخونية أو صداع', k: ['سخونيه', 'سخونه', 'حراره', 'حمي', 'صداع', 'وجع راس', 'وجع في راسي', 'الم في راسي'], s: ['para', 'ibu'] },
+  { t: 'برد', k: ['برد', 'رشح', 'زكام', 'انفلونزا', 'احتقان', 'انف مسدود', 'عطس'], s: ['para', 'nasal', 'ceti'] },
+  { t: 'التهاب حلق', k: ['زور', 'الحلق', 'حلقي', 'التهاب حلق'], s: ['loz', 'para'] },
+  { t: 'كحة', k: ['كحه', 'سعال', 'بكح'], s: ['dxm'], wet: ['بلغم', 'صدري مليان', 'رطبه'], ws: ['amb'] },
+  { t: 'حساسية', k: ['حساسيه', 'هرش', 'حكه', 'طفح', 'دموع'], s: ['ceti', 'lora'] },
+  { t: 'حموضة', k: ['حموضه', 'حرقان', 'حرقه', 'ارتجاع', 'عسر هضم'], s: ['antac'] },
+  { t: 'غازات أو مغص', k: ['انتفاخ', 'غازات', 'مغص', 'تقلصات', 'قولون'], s: ['simet', 'hyo'] },
+  { t: 'إسهال', k: ['اسهال', 'دور معوي', 'بطني سايبه', 'بطن سايبه'], s: ['ors', 'lop'] },
+  { t: 'إمساك', k: ['امساك'], s: ['lact'] },
+  { t: 'غثيان أو قيء', k: ['غثيان', 'استفراغ', 'ترجيع'], s: ['ors'] },
+  { t: 'وجع عضلات أو مفاصل', k: ['عضلات', 'مفاصل', 'ضهري', 'ظهري', 'رقبتي', 'شد عضلي', 'تكسير', 'ركبتي'], s: ['diclo', 'para'] },
+  { t: 'ألم الدورة', k: ['الم الدوره', 'وجع الدوره', 'مغص الدوره'], s: ['ibu', 'para'] },
+];
+const NUMW = { 'تلات': 3, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'ست': 6, 'سته': 6 };
+function localHelper(msgs, meds) {
+  const T = norm(D2(msgs.filter(m => m.r == 'u').map(m => m.t).join(' . '))), mk = (reply, o = {}) => ({ reply, urgent: false, suggestions: [], src: 'local', ...o });
+  const END = '\n\n(ده إرشاد بس، والدكتور أو الصيدلي هو اللي يأكد.)';
+  if (hasAny(T, RED)) return mk('الأعراض دي ممكن تكون خطيرة، ومينفعش أنصح بدواء من غير كشف. اتصل بالإسعاف 123 أو روح أقرب طوارئ دلوقتي.' + END, { urgent: true });
+  const fever = hasAny(T, ['سخونيه', 'سخونه', 'حراره', 'حمي']);
+  let days = /اسبوع|اسبوعين|اسابيع/.test(T) ? 7 : /يومين/.test(T) ? 2 : 0;
+  for (const m of T.matchAll(/(\d+|تلات|ثلاثه|ثلاث|اربعه|اربع|خمسه|خمس|سته|ست)\s*(ايام|يوم)/g)) days = Math.max(days, +m[1] || NUMW[m[1]] || 0);
+  const child = hasWord(T, ['طفل', 'طفلي', 'طفله', 'بيبي', 'رضيع', 'ابني', 'بنتي', 'ابنتي', 'ولدي', 'عيل', 'الطفل']), preg = hasWord(T, ['حامل', 'حمل', 'مرضع', 'ارضع', 'رضاعه']);
+  if (child && fever && hasAny(T, ['رضيع', 'شهور', 'شهر', 'مولود'])) return mk('سخونية في رضيع صغير محتاجة كشف عند الدكتور فورًا. روح الطوارئ أو كلّم دكتور الأطفال دلوقتي.' + END, { urgent: true });
+  if (fever && (days >= 3 || /\b(39|40|41)\b/.test(T))) return mk('السخونية العالية أو اللي بتستمر 3 أيام أو أكتر لازم تتكشف عند دكتور. متتأخرش.' + END, { urgent: true });
+  if (days >= 7) return mk('الأعراض اللي بقالها أسبوع أو أكتر لازم دكتور يشوفها. روح كشف.' + END, { urgent: true });
+  if (child) return mk('جرعات أدوية الأطفال بتتحسب بالوزن والسن، ومينفعش أقترح دواء من غير دكتور أو صيدلي. كلّم دكتور الأطفال أو اسأل الصيدلي.' + END);
+  if (preg) return mk('في الحمل والرضاعة مينفعش تاخد أي دواء من غير ما تسأل دكتورك، حتى الأدوية البسيطة.' + END);
+  const hit = SYM.filter(c => hasAny(T, c.k));
+  if (!hit.length) return mk('ممكن توصفلي الأعراض أكتر؟ إيه اللي حاسس بيه بالظبط، ومن إمتى؟ وعندك سخونية؟ وسنك كام؟ وعندك أمراض مزمنة أو حساسية من أدوية أو حامل؟' + END);
+  const ids = []; hit.forEach(c => (c.wet && hasAny(T, c.wet) ? c.ws : c.s).forEach(x => { if (!ids.includes(x)) ids.push(x); }));
+  const ing = (meds || []).map(m => ((drug(m.d) || [])[3] || '')).join(' ').toUpperCase();
+  const sug = ids.slice(0, 4).map(id => { const o = { ...SG[id], key: id }; 
+    if (id == 'para' && ing.includes('PARACETAMOL')) o.note = '⚠ عندك في أدويتك دواء فيه باراسيتامول أصلًا، متزودش عليه. ' + o.note;
+    if ((id == 'ibu' || id == 'diclo') && /IBUPROFEN|DICLOFENAC|ASPIRIN|ACETYLSALICYLIC|NAPROXEN/.test(ing)) o.note = '⚠ عندك في أدويتك مسكن من نفس العائلة، متجمعش بينهم. ' + o.note;
+    return o; });
+  return mk('من اللي وصفته (' + hit.map(c => c.t).join(' + ') + ') دي أدوية شائعة من غير روشتة ممكن تفيد:' + '\n\nقبل ما تاخد أي دواء: لو حامل أو بترضّع، أو عندك سكر أو ضغط أو قلب أو كلى أو كبد أو ربو أو قرحة، أو حساسية من دواء، اسأل الصيدلي أو الدكتور الأول.\nولو الأعراض زادت أو فضلت أكتر من 3 أيام روح للدكتور.' + END, { suggestions: sug });
+}
+async function chatAI(msgs, meds) {
+  if (!PUSH_URL) return null;
+  const h = msgs.slice(-10); while (h.length && h[0].r != 'u') h.shift();
+  const ml = (meds || []).map(m => { const d = drug(m.d); return m.name + (d && d[3] ? ' (' + d[3] + ')' : ''); });
+  const r = await fetch(PUSH_URL + '/chat', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ messages: h.map(m => ({ r: m.r, t: m.t })), meds: ml }) });
+  if (r.status == 501) return null;
+  if (!r.ok) throw new Error(r.status);
+  const j = await r.json(); if (!j.reply) return null;
+  j.src = 'ai'; return j;
+}
+async function sendChat() {
+  const inp = $('#cm'), t = inp ? inp.value.trim() : ''; if (!t || chatBusy) return;
+  chat.push({ r: 'u', t: t.slice(0, 600) }); chatBusy = true; render(); scrollChat();
+  const meds = useMeds && me() ? normMeds(me().meds) : [], safe = localHelper(chat, meds);
+  let rep = null;
+  if (!safe.urgent) { try { rep = await chatAI(chat, meds); } catch (e) { rep = null; } } // علامات الخطر بتتعامل محليًا الأول
+  if (!rep) rep = safe;
+  chat.push({ r: 'b', t: rep.reply, sug: rep.suggestions || [], urgent: !!rep.urgent, src: rep.src });
+  chatBusy = false; render(); scrollChat();
+}
+const scrollChat = () => { const c = $('#chat'); if (c && c.lastElementChild && c.lastElementChild.scrollIntoView) c.lastElementChild.scrollIntoView({ block: 'end' }); };
+const pickTerm = sg => { for (const b of sg.brands || []) if (VOC.has(norm(b))) return b; return sg.term || (sg.ingredient || '').split(' ')[0]; };
+const chatSearch = (mi, si) => { const sg = chat[mi].sug[si]; q = pickTerm(sg); pin = null; ocrC = []; cv = 's'; render(); refresh(); };
+const bubble = (m, mi) => m.r == 'u' ? `<div class="bub u">${esc(m.t)}</div>` :
+  `<div class="bub b">${m.urgent ? '<div class="urg">⚠️ الأعراض دي ممكن تحتاج دكتور أو طوارئ دلوقتي. لو الحالة خطيرة اتصل بالإسعاف 123.</div>' : ''}${esc(m.t).replace(/\n/g, '<br>')}${(m.sug || []).map((sg, si) => `<div class="card"><b>${esc(sg.ingredient)}</b>${sg.brands && sg.brands.length ? ' <small>(' + esc(sg.brands.join('، ')) + ')</small>' : ''}<br><small>${esc(sg.note || '')}</small><br><button class="sec" style="margin-top:6px" onclick="chatSearch(${mi},${si})">دوّر عليه في الصيدليات</button></div>`).join('')}${m.src == 'local' ? '<br><small>(رد مبسّط من غير الذكاء الاصطناعي)</small>' : ''}</div>`;
+const chatView = () => `<div class="card" style="background:#fff4d6;border-color:#f0d58a"><small>⚠️ ده مساعد استرشادي بس: مش بديل للدكتور أو الصيدلي، ومش بيشخّص. راجع الدكتور قبل أي دواء، وفي الطوارئ اتصل بالإسعاف 123.</small></div>
+  <div id="chat">${chat.map(bubble).join('') || '<p class="muted">اكتب اللي حاسس بيه، مثلًا: «عندي صداع وسخونية».</p>'}${chatBusy ? '<div class="bub b muted">بيكتب…</div>' : ''}</div>
+  <div class="row"><input id="cm" placeholder="اكتب أعراضك…" onkeydown="if(event.key=='Enter')sendChat()"><button onclick="sendChat()">إرسال</button></div>
+  <label><input type="checkbox" ${useMeds ? 'checked' : ''} onchange="useMeds=this.checked">خد أدويتي الحالية في الاعتبار (بتتبعت أسماء الأدوية بس، من غير أي بيانات شخصية)</label>
+  <button class="sec" onclick="chat=[];render()">محادثة جديدة</button>`;
+
 function patient() {
   if (!me()) { if (!cd) cd = { meds:[] }; return '<h3>سجّل بياناتك</h3>' + custForm(); }
-  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='p'?'':'sec'}" onclick="goP()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : editP ? (medOnly ? '' : '<h3>تعديل بياناتي</h3>') + custForm() : custView(me()));
+  return `<div class="row"><button class="${cv=='s'?'':'sec'}" onclick="cv='s';render()">بحث عن دواء</button><button class="${cv=='c'?'':'sec'}" onclick="cv='c';render()">🩺 مساعد صحي</button><button class="${cv=='p'?'':'sec'}" onclick="goP()">بياناتي وأدويتي</button></div>` + (cv == 's' ? search() : cv == 'c' ? chatView() : editP ? (medOnly ? '' : '<h3>تعديل بياناتي</h3>') + custForm() : custView(me()));
 }
 async function saveCu() {
   keepC(); const c = cd, isNew = !me();
