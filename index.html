@@ -414,7 +414,7 @@ const custView = c => `<div class="card"><div class="row" style="justify-content
   <div class="row" style="justify-content:space-between;margin-top:12px"><h4 style="margin:0">أدويتي</h4><button onclick="startEdit(1)">➕ إضافة دواء</button></div>
   ${normMeds(c.meds).map(m => `<div class="card"><b>${esc(m.name)}</b> ${m.chronic ? '<span class="tag">مزمن</span>' : ''}${medTxt(m) ? `<br><span>${esc(medTxt(m))}</span>` : ''}${m.n ? `<br><small>باخده بقالي ${esc(m.n)} ${UN[m.u || 'm']}</small>` : ''}${remTxt(m) ? `<br><small>${esc(remTxt(m))}</small><br>${doseChips(m)}` : ''}</div>`).join('') || '<p class="muted">مفيش أدوية مسجلة. اضغط "إضافة دواء".</p>'}<div style="margin-top:14px"><button class="sec" onclick="testNotif()">🔔 جرّب الإشعار (بعد 5 ثواني)</button><small style="display:block;margin-top:6px">لو الإشعار جه من غير صوت: إعدادات الموبايل ← التطبيقات ← Chrome (أو دوائي) ← الإشعارات ← اختار تصنيف الموقع ← الأهمية Urgent أو High والصوت مش «بدون صوت»، واتأكد إن الموبايل مش صامت ولا على «عدم الإزعاج».</small></div>${resView()}${normMeds(c.meds).some(m => m.rem && m.rem.on) ? '<button class="sec" style="margin-top:8px" onclick="testAlarm()">🔔 جرّب صوت المنبه</button>' : ''}`;
 // ===== المساعد الصحي: بيقترح أدوية شائعة من غير روشتة وبيحوّل للدكتور =====
-let chat = [], chatBusy = false, useMeds = true;
+let chat = [], chatBusy = false, useMeds = true, why = '';
 const D2 = s => String(s).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 const hasAny = (t, a) => a.some(w => t.includes(norm(w)));
 const hasWord = (t, a) => { const ws = t.split(' '); return a.some(w => ws.includes(norm(w))); };
@@ -480,28 +480,35 @@ async function chatAI(msgs, meds) {
   const h = msgs.slice(-10); while (h.length && h[0].r != 'u') h.shift();
   const ml = (meds || []).map(m => { const d = drug(m.d); return m.name + (d && d[3] ? ' (' + d[3] + ')' : ''); });
   const r = await fetch(PUSH_URL + '/chat', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ messages: h.map(m => ({ r: m.r, t: m.t })), meds: ml }) });
-  if (r.status == 501) return null;
-  if (!r.ok) throw new Error(r.status);
-  const j = await r.json(); if (!j.reply) return null;
+  if (r.status == 501) { why = 'السيرفر مفيهوش مفتاح Gemini (شغّل wrangler secret put GEMINI_API_KEY ثم wrangler deploy)'; return null; }
+  if (!r.ok) throw new Error(r.status == 429 ? 'وصلت للحد المسموح دلوقتي، جرّب بعد شوية' : 'خطأ من السيرفر ' + r.status);
+  let j; try { j = await r.json(); } catch (e) { throw new Error('السيرفر لسه على النسخة القديمة (شغّل wrangler deploy بعد ما تنسخ worker.js الجديد)'); }
+  if (!j.reply) throw new Error('رد فاضي من الذكاء الاصطناعي');
   j.src = 'ai'; return j;
 }
 async function sendChat() {
   const inp = $('#cm'), t = inp ? inp.value.trim() : ''; if (!t || chatBusy) return;
-  chat.push({ r: 'u', t: t.slice(0, 600) }); chatBusy = true; render(); scrollChat();
+  chat.push({ r: 'u', t: t.slice(0, 600) }); chatBusy = true; renderChat(true);
   const meds = useMeds && me() ? normMeds(me().meds) : [], safe = localHelper(chat, meds);
-  let rep = null;
-  if (!safe.urgent) { try { rep = await chatAI(chat, meds); } catch (e) { rep = null; } } // علامات الخطر بتتعامل محليًا الأول
-  if (!rep) rep = safe;
-  chat.push({ r: 'b', t: rep.reply, sug: rep.suggestions || [], urgent: !!rep.urgent, src: rep.src });
-  chatBusy = false; render(); scrollChat();
+  let rep = null; why = '';
+  if (!safe.urgent) { try { rep = await chatAI(chat, meds); } catch (e) { rep = null; why = e.message || String(e); } } // علامات الخطر بتتعامل محليًا الأول
+  if (!rep) rep = { ...safe, why };
+  chat.push({ r: 'b', t: rep.reply, sug: rep.suggestions || [], urgent: !!rep.urgent, src: rep.src, why: rep.why });
+  chatBusy = false; renderChat();
+}
+const chatBody = () => (chat.map(bubble).join('') || '<p class="muted">اكتب اللي حاسس بيه، مثلًا: «عندي صداع وسخونية».</p>') + (chatBusy ? '<div class="bub b muted">بيكتب…</div>' : '');
+function renderChat(clear) {
+  const c = $('#chat'), i = $('#cm'); if (!c) return render();
+  c.innerHTML = chatBody(); if (clear && i) i.value = '';
+  if (i && i.focus) i.focus(); scrollChat();
 }
 const scrollChat = () => { const c = $('#chat'); if (c && c.lastElementChild && c.lastElementChild.scrollIntoView) c.lastElementChild.scrollIntoView({ block: 'end' }); };
 const pickTerm = sg => { for (const b of sg.brands || []) if (VOC.has(norm(b))) return b; return sg.term || (sg.ingredient || '').split(' ')[0]; };
 const chatSearch = (mi, si) => { const sg = chat[mi].sug[si]; q = pickTerm(sg); pin = null; ocrC = []; cv = 's'; render(); refresh(); };
 const bubble = (m, mi) => m.r == 'u' ? `<div class="bub u">${esc(m.t)}</div>` :
-  `<div class="bub b">${m.urgent ? '<div class="urg">⚠️ الأعراض دي ممكن تحتاج دكتور أو طوارئ دلوقتي. لو الحالة خطيرة اتصل بالإسعاف 123.</div>' : ''}${esc(m.t).replace(/\n/g, '<br>')}${(m.sug || []).map((sg, si) => `<div class="card"><b>${esc(sg.ingredient)}</b>${sg.brands && sg.brands.length ? ' <small>(' + esc(sg.brands.join('، ')) + ')</small>' : ''}<br><small>${esc(sg.note || '')}</small><br><button class="sec" style="margin-top:6px" onclick="chatSearch(${mi},${si})">دوّر عليه في الصيدليات</button></div>`).join('')}${m.src == 'local' ? '<br><small>(رد مبسّط من غير الذكاء الاصطناعي)</small>' : ''}</div>`;
+  `<div class="bub b">${m.urgent ? '<div class="urg">⚠️ الأعراض دي ممكن تحتاج دكتور أو طوارئ دلوقتي. لو الحالة خطيرة اتصل بالإسعاف 123.</div>' : ''}${esc(m.t).replace(/\n/g, '<br>')}${(m.sug || []).map((sg, si) => `<div class="card"><b>${esc(sg.ingredient)}</b>${sg.brands && sg.brands.length ? ' <small>(' + esc(sg.brands.join('، ')) + ')</small>' : ''}<br><small>${esc(sg.note || '')}</small><br><button class="sec" style="margin-top:6px" onclick="chatSearch(${mi},${si})">دوّر عليه في الصيدليات</button></div>`).join('')}${m.src == 'local' ? '<br><small>(رد مبسّط من غير الذكاء الاصطناعي' + (m.why ? ': ' + esc(m.why) : '') + ')</small>' : ''}</div>`;
 const chatView = () => `<div class="card" style="background:#fff4d6;border-color:#f0d58a"><small>⚠️ ده مساعد استرشادي بس: مش بديل للدكتور أو الصيدلي، ومش بيشخّص. راجع الدكتور قبل أي دواء، وفي الطوارئ اتصل بالإسعاف 123.</small></div>
-  <div id="chat">${chat.map(bubble).join('') || '<p class="muted">اكتب اللي حاسس بيه، مثلًا: «عندي صداع وسخونية».</p>'}${chatBusy ? '<div class="bub b muted">بيكتب…</div>' : ''}</div>
+  <div id="chat">${chatBody()}</div>
   <div class="row"><input id="cm" placeholder="اكتب أعراضك…" onkeydown="if(event.key=='Enter')sendChat()"><button onclick="sendChat()">إرسال</button></div>
   <label><input type="checkbox" ${useMeds ? 'checked' : ''} onchange="useMeds=this.checked">خد أدويتي الحالية في الاعتبار (بتتبعت أسماء الأدوية بس، من غير أي بيانات شخصية)</label>
   <button class="sec" onclick="chat=[];render()">محادثة جديدة</button>`;
