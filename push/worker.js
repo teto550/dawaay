@@ -143,18 +143,25 @@ async function chat(req, env) {
   const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify({
     systemInstruction: { parts: [{ text: CHAT_SYS + (meds.length ? '\ncurrent_medicines: ' + meds.join('; ') : '') }] },
     contents: msgs.map(m => ({ role: m.r === 'u' ? 'user' : 'model', parts: [{ text: m.t }] })),
+    safetySettings: ['HARASSMENT', 'HATE_SPEECH', 'SEXUALLY_EXPLICIT', 'DANGEROUS_CONTENT'].map(c => ({ category: 'HARM_CATEGORY_' + c, threshold: 'BLOCK_ONLY_HIGH' })),
     generationConfig: { temperature: 0.3, responseMimeType: 'application/json' } }) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) return jres({ error: (j.error && j.error.message) || 'ai error' }, r.status === 429 ? 429 : 502);
   try {
-    const txt = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
-    const o = JSON.parse(txt.replace(/```json|```/g, ''));
+    const cand = (j.candidates || [])[0], txt = ((cand && cand.content && cand.content.parts) || []).filter(p => !p.thought).map(p => p.text || '').join('').replace(/```json|```/g, '').trim();
+    if (!txt) return jres({ error: 'empty ai reply' + ((j.promptFeedback && j.promptFeedback.blockReason) || (cand && cand.finishReason) ? ' (' + ((j.promptFeedback && j.promptFeedback.blockReason) || cand.finishReason) + ')' : '') }, 502);
+    // لو الرد مش JSON سليم: نحاول نطلّع الـ JSON من جوّه النص، ولو مفيش نعرض النص نفسه بدل ما نرميه
+    let o; try { o = JSON.parse(txt); } catch (e) { const mm = txt.match(/\{[\s\S]*\}/); try { o = JSON.parse(mm ? mm[0] : ''); } catch (e2) { o = { reply: txt }; } }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) o = { reply: txt };
+    if (!String(o.reply || '').trim()) return jres({ error: 'empty ai reply' }, 502);
     const sug = (Array.isArray(o.suggestions) ? o.suggestions : []).slice(0, 4).filter(x => x && typeof x.ingredient === 'string').map(x => ({ ingredient: x.ingredient.slice(0, 80), brands: (Array.isArray(x.brands) ? x.brands : []).filter(y => typeof y === 'string').slice(0, 3).map(y => y.slice(0, 40)), note: typeof x.note === 'string' ? x.note.slice(0, 300) : '' }));
     return jres({ reply: String(o.reply || '').slice(0, 2500), urgent: !!o.urgent, suggestions: o.urgent ? [] : sug });
   } catch (e) { return jres({ error: 'bad ai reply' }, 502); }
 }
 
-const cors = env => ({ 'Access-Control-Allow-Origin': env.ALLOW_ORIGIN, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
+// الأصول المسموحة: موقعك (ALLOW_ORIGIN) + التطبيق النيتف (Capacitor بيبعت https://localhost أو capacitor://localhost)
+const origins = env => [...String(env.ALLOW_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean), 'https://localhost', 'capacitor://localhost', 'http://localhost'];
+const cors = (env, origin) => ({ 'Access-Control-Allow-Origin': origins(env).includes(origin) ? origin : String(env.ALLOW_ORIGIN || '').split(',')[0].trim(), 'Vary': 'Origin', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
 const num = (v, lo, hi) => Number.isFinite(+v) && +v >= lo && +v <= hi;
 
 async function sync(req, env) {
@@ -176,10 +183,10 @@ async function sync(req, env) {
 
 export default {
   async fetch(req, env) {
-    const u = new URL(req.url), h = cors(env);
+    const u = new URL(req.url), org = req.headers.get('Origin'), h = cors(env, org);
     if (req.method === 'OPTIONS') return new Response(null, { headers: h });
     if (req.method === 'POST' && (u.pathname === '/sync' || u.pathname === '/ack' || u.pathname === '/read' || u.pathname === '/chat')) {
-      if (req.headers.get('Origin') !== env.ALLOW_ORIGIN) return new Response('forbidden', { status: 403, headers: h });
+      if (!origins(env).includes(org)) return new Response('forbidden', { status: 403, headers: h });
       const r = await (u.pathname === '/ack' ? ack(req, env) : u.pathname === '/read' ? read(req, env) : u.pathname === '/chat' ? chat(req, env) : sync(req, env)); const hh = new Headers(r.headers); Object.entries(h).forEach(([k, v]) => hh.set(k, v));
       return new Response(r.body, { status: r.status, headers: hh });
     }
