@@ -35,6 +35,15 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['s']))
       );
     }
+    // الطلب على الأدوية في المحافظة: عدّادات مجهولة (من غير أي بيانات شخصية)
+    match /demand/{id} {
+      allow read: if signed();
+      allow create: if signed() && request.resource.data.keys().hasOnly(['gov', 'wk', 'gk', 'd', 'n', 'miss'])
+                    && request.resource.data.n == 1 && request.resource.data.miss in [0, 1];
+      allow update: if signed() && request.resource.data.gk == resource.data.gk && request.resource.data.d == resource.data.d
+                    && request.resource.data.n == resource.data.n + 1
+                    && request.resource.data.miss in [resource.data.miss, resource.data.miss + 1];
+    }
     // الباركود: أي مسجّل يقرا ويضيف
     match /barcodes/{code} {
       allow read, create, update: if signed();

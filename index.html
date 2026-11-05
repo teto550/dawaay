@@ -144,7 +144,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const drug = id => DM.get(id);
 const dn = id => { const d = drug(id); return d ? (d[1] || d[2]) : '؟'; };
 const LS = 'dawaay_v1', CN = { ph:'pharmacies', inv:'inventory', res:'reservations', cu:'customers', bc:'barcodes' };
-let S = { ph:[], inv:[], res:[], cu:[], bc:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 10, openOnly = true, useRad = false, lastRes = [];
+let S = { ph:[], inv:[], res:[], cu:[], bc:[], demand:[] }, fs = null, role = localStorage.getItem('dv_role'), q = '', sel = null, rad = 10, openOnly = true, useRad = false, lastRes = [];
 let loc = JSON.parse(localStorage.getItem('dv_loc') || '[30.0444,31.2357]');
 let my = localStorage.getItem('dv_my');
 let user = null, fa = null, am = 'in', pend = null, phAt = 0, editPh = false, updSeq = 0;
@@ -178,7 +178,7 @@ async function load() {
     my = S.ph.find(x => x.id == u) ? u : null;
   } else {
     const s = localStorage.getItem(LS);
-    S = { cu:[], bc:[], ...(s ? JSON.parse(s) : seed()) };
+    S = { cu:[], bc:[], demand:[], ...(s ? JSON.parse(s) : seed()) };
     localStorage.setItem(LS, JSON.stringify(S));
   }
   if (S.inv.some(wid) || S.cu.some(c => normMeds(c.meds).some(wid))) await loadWorld();
@@ -255,6 +255,15 @@ function find(raw, W) {
   return srt.slice(0, 8).map(x => A[x[0]]);
 }
 const hav = (a,b,c,d) => { const r = x => x*Math.PI/180, u = r(c-a), v = r(d-b), h = Math.sin(u/2)**2 + Math.cos(r(a))*Math.cos(r(c))*Math.sin(v/2)**2; return 12742*Math.asin(Math.sqrt(h)); };
+// ===== المحافظات (تحديد تقريبي بأقرب عاصمة محافظة) =====
+const GOV = [['cairo','القاهرة',30.0444,31.2357],['giza','الجيزة',30.0131,31.2089],['alex','الإسكندرية',31.2001,29.9187],['qalyubia','القليوبية',30.466,31.185],['sharqia','الشرقية',30.5877,31.502],['dakahlia','الدقهلية',31.0409,31.3785],['gharbia','الغربية',30.7865,31.0004],['monufia','المنوفية',30.5972,30.9876],['beheira','البحيرة',31.0341,30.4682],['kafr','كفر الشيخ',31.1107,30.9388],['damietta','دمياط',31.4165,31.8133],['portsaid','بورسعيد',31.2653,32.3019],['ismailia','الإسماعيلية',30.5965,32.2715],['suez','السويس',29.9668,32.5498],['nsinai','شمال سيناء',31.1316,33.7984],['ssinai','جنوب سيناء',28.2417,33.6222],['faiyum','الفيوم',29.3084,30.8428],['beni','بني سويف',29.0661,31.0994],['minya','المنيا',28.1099,30.7503],['asyut','أسيوط',27.1783,31.1859],['sohag','سوهاج',26.5591,31.6957],['qena','قنا',26.1551,32.716],['luxor','الأقصر',25.6872,32.6396],['aswan','أسوان',24.0889,32.8998],['redsea','البحر الأحمر',27.2579,33.8116],['valley','الوادي الجديد',25.439,30.5586],['matrouh','مطروح',31.3543,27.2373]];
+const GCAIRO = ['cairo', 'giza', 'qalyubia']; // نعتبرهم منطقة واحدة (القاهرة الكبرى) لأن الحدود بينهم متداخلة
+const REG = [['gcairo', 'القاهرة الكبرى (القاهرة والجيزة والقليوبية)'], ...GOV.filter(g => !GCAIRO.includes(g[0])).map(g => [g[0], g[1]])];
+const regOf = id => GCAIRO.includes(id) ? 'gcairo' : id;
+const govOf = ll => regOf(GOV.reduce((b, g) => { const d = hav(ll[0], ll[1], g[2], g[3]); return d < b[0] ? [d, g[0]] : b; }, [1e9, ''])[1]);
+const govName = id => (REG.find(g => g[0] == id) || [0, id])[1];
+const phGov = p => p.gov || govOf([p.lat, p.lng]);
+const wkKey = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const w1 = new Date(d.getFullYear(), 0, 4); return d.getFullYear() + '-W' + String(1 + Math.round(((d - w1) / 864e5 - 3 + (w1.getDay() + 6) % 7) / 7)).padStart(2, '0'); };
 function isOpen(p) {
   if (p.h24) return true;
   const n = new Date(), t = n.getHours()*60 + n.getMinutes(), f = s => { const [a,b] = s.split(':'); return a*60 + +b; }, o = f(p.o), c = f(p.c);
@@ -305,6 +314,24 @@ function results(m = cands()) {
   }
   return h;
 }
+// بنسجّل إن العميل دوّر على الدواء ده في المحافظة دي (عدّاد مجهول، مرة في الساعة لكل دواء)، ومعاه هل كان متوفر في المحافظة
+async function logDemand(id) {
+  try {
+    const gov = govOf(loc), seen = lsj('dv_dm'), key = gov + '|' + id;
+    if (seen[key] && Date.now() - seen[key] < 3600000) return;
+    seen[key] = Date.now(); lss('dv_dm', seen);
+    const miss = !S.inv.some(i => { const p = S.ph.find(x => x.id == i.p); return i.d == id && i.q > 0 && p && phGov(p) == gov; });
+    const wk = wkKey(Date.now()), docId = gov + '|' + wk + '|' + id;
+    if (fs) {
+      if (!user) return;
+      const ref = fs.doc(fs.db, 'demand', docId), cur = await fs.getDoc(ref);
+      await fs.setDoc(ref, cur.exists() ? { ...cur.data(), n:cur.data().n + 1, miss:cur.data().miss + (miss ? 1 : 0) } : { gov, wk, gk:gov + '|' + wk, d:id, n:1, miss:miss ? 1 : 0 });
+    } else {
+      let r = S.demand.find(x => x.id == docId); if (!r) S.demand.push(r = { id:docId, gov, wk, gk:gov + '|' + wk, d:id, n:0, miss:0 });
+      r.n++; if (miss) r.miss++; localStorage.setItem(LS, JSON.stringify(S));
+    }
+  } catch (e) { console.warn('demand log', e); }
+}
 const updRes = async () => {
   const e = $('#res'); if (!e) return;
   const qi = $('#q'); if (qi) qi.value = q;
@@ -315,6 +342,7 @@ const updRes = async () => {
     catch (err) { console.warn('inventory load failed', err); }
     if (seq != updSeq) return; // اتغيّر البحث وإحنا بنحمّل
   }
+  if (role == 'p' && sel && q.length >= 3) logDemand(sel);
   e.innerHTML = results(m); markers();
 };
 function search() {
@@ -419,12 +447,7 @@ const D2 = s => String(s).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexO
 const hasAny = (t, a) => a.some(w => t.includes(norm(w)));
 const hasWord = (t, a) => { const ws = t.split(' '); return a.some(w => ws.includes(norm(w))); };
 // علامات خطر: أي واحدة منهم = تحويل للدكتور/الطوارئ بدون اقتراح أدوية (بتتفحص قبل أي رد)
-const RED = ['الم في الصدر', 'وجع في الصدر', 'ضيق في الصدر', 'ضغط في الصدر', 'صعوبه في التنفس', 'صعوبه في النفس', 'ضيق في التنفس', 'ضيق تنفس', 'مش قادر اتنفس', 'نهجان', 'نفسي مقطوع', 'نفسي بيضيق', 'مش عارف اتنفس', 'اغماء', 'اغمي عليا', 'فقدت الوعي', 'تشنجات', 'نوبه تشنج', 'نوبات تشنج', 'غيبوبه', 'قيء دم', 'استفراغ دم', 'بستفرغ دم', 'دم في البراز', 'براز اسود', 'دم في البول', 'نزيف', 'تورم في الوش', 'تورم الوش', 'تورم في الشفايف', 'صعوبه في البلع', 'شلل', 'تنميل في نص', 'لجلجه', 'انحراف الوش', 'تيبس في الرقبه', 'رقبتي ناشفه', 'انتحار', 'اموت نفسي', 'اقتل نفسي', 'الم شديد في البطن', 'وجع شديد في البطن', 'بطني بتوجعني جدا'];
-// وجع الصدر بصيغ عامية (صدري بيوجعني / الم شديد في صدري): كلمة صدر/قلب جنب كلمة وجع في نفس الجملة
-const PAINW = /^(?:بي|بت|ي|ت)?(?:وجع|الم|ضيق|ثقل|تقيل|خنق|نغز|طعن)/, CHESTW = /^(?:ال|بال|وال|لل|ب|و|ف)?(?:صدر|قلب)/;
-const chestPain = t => { const w = t.split(' ').filter(Boolean); return w.some((x, i) => CHESTW.test(x) && w.slice(Math.max(0, i - 4), i + 5).some(y => PAINW.test(y))); };
-// حرارة 39 أو أكتر (بتتفحص على النص الأصلي لأن norm بيشيل العلامة العشرية، وبنتجاهل الأرقام اللي بعدها سنة/يوم/جرعة...)
-const highTemp = raw => { for (const m of String(raw).matchAll(/(?:^|[^\d.,/])(\d{2}(?:[.,]\d)?)(?![\d/])\s*(سن|عام|يوم|ايام|أيام|كيلو|كجم|شهر|ساع|دقيق|مر|حب|قرص|مج|%)?/g)) { if (m[2]) continue; const v = parseFloat(m[1].replace(',', '.')); if (v >= 39 && v <= 43) return true; } return false; };
+const RED = ['الم في الصدر', 'وجع في الصدر', 'ضيق في الصدر', 'ضغط في الصدر', 'صعوبه في التنفس', 'صعوبه في النفس', 'ضيق في التنفس', 'ضيق تنفس', 'مش قادر اتنفس', 'نهجان', 'اغماء', 'اغمي عليا', 'فقدت الوعي', 'تشنج', 'غيبوبه', 'قيء دم', 'استفراغ دم', 'بستفرغ دم', 'دم في البراز', 'براز اسود', 'دم في البول', 'نزيف', 'تورم في الوش', 'تورم الوش', 'تورم في الشفايف', 'صعوبه في البلع', 'شلل', 'تنميل في نص', 'لجلجه', 'انحراف الوش', 'تيبس في الرقبه', 'رقبتي ناشفه', 'انتحار', 'اموت نفسي', 'اقتل نفسي', 'الم شديد في البطن', 'وجع شديد في البطن', 'بطني بتوجعني جدا'];
 const SG = {
   para: { ingredient: 'Paracetamol', brands: ['Panadol', 'Adol', 'Cetal'], note: 'للسخونية والصداع والألم الخفيف. اتبع النشرة، ومتاخدش معاه حاجة تانية فيها باراسيتامول (زي أدوية البرد المركبة). خلي بالك لو عندك مشكلة في الكبد.' },
   ibu: { ingredient: 'Ibuprofen', brands: ['Brufen', 'Epifen'], note: 'بديل للألم والالتهاب. يتاخد بعد الأكل. مش مناسب لو حامل أو عندك قرحة معدة أو كلى أو ربو أو ضغط من غير ما تسأل الدكتور.' },
@@ -443,7 +466,7 @@ const SG = {
   diclo: { ingredient: 'Diclofenac gel', brands: ['Voltaren'], note: 'جل موضعي لوجع العضلات والمفاصل (على الجلد السليم بس).' },
 };
 const SYM = [
-  { t: 'سخونية أو صداع', k: ['سخونيه', 'سخونه', 'حراره', 'حرارتي', 'حمي', 'صداع', 'وجع راس', 'وجع في راسي', 'الم في راسي'], s: ['para', 'ibu'] },
+  { t: 'سخونية أو صداع', k: ['سخونيه', 'سخونه', 'حراره', 'حمي', 'صداع', 'وجع راس', 'وجع في راسي', 'الم في راسي'], s: ['para', 'ibu'] },
   { t: 'برد', k: ['برد', 'رشح', 'زكام', 'انفلونزا', 'احتقان', 'انف مسدود', 'عطس'], s: ['para', 'nasal', 'ceti'] },
   { t: 'التهاب حلق', k: ['زور', 'الحلق', 'حلقي', 'التهاب حلق'], s: ['loz', 'para'] },
   { t: 'كحة', k: ['كحه', 'سعال', 'بكح'], s: ['dxm'], wet: ['بلغم', 'صدري مليان', 'رطبه'], ws: ['amb'] },
@@ -454,20 +477,19 @@ const SYM = [
   { t: 'إمساك', k: ['امساك'], s: ['lact'] },
   { t: 'غثيان أو قيء', k: ['غثيان', 'استفراغ', 'ترجيع'], s: ['ors'] },
   { t: 'وجع عضلات أو مفاصل', k: ['عضلات', 'مفاصل', 'ضهري', 'ظهري', 'رقبتي', 'شد عضلي', 'تكسير', 'ركبتي'], s: ['diclo', 'para'] },
-  { t: 'ألم الدورة', k: ['الم الدوره', 'وجع الدوره', 'مغص الدوره', 'الم في الدوره', 'وجع في الدوره', 'مغص في الدوره', 'الدوره الشهريه'], s: ['ibu', 'para'] },
-  { t: 'وجع أسنان', k: ['وجع اسنان', 'وجع سنه', 'الم اسنان', 'الم سنه', 'وجع في سنتي', 'وجع في ضرسي', 'ضرسي', 'سنتي بتوجعني'], s: ['para', 'ibu'] },
+  { t: 'ألم الدورة', k: ['الم الدوره', 'وجع الدوره', 'مغص الدوره'], s: ['ibu', 'para'] },
 ];
 const NUMW = { 'تلات': 3, 'ثلاث': 3, 'ثلاثه': 3, 'اربع': 4, 'اربعه': 4, 'خمس': 5, 'خمسه': 5, 'ست': 6, 'سته': 6 };
 function localHelper(msgs, meds) {
-  const RAW = D2(msgs.filter(m => m.r == 'u').map(m => m.t).join(' . ')), T = norm(RAW), mk = (reply, o = {}) => ({ reply, urgent: false, suggestions: [], src: 'local', ...o });
+  const T = norm(D2(msgs.filter(m => m.r == 'u').map(m => m.t).join(' . '))), mk = (reply, o = {}) => ({ reply, urgent: false, suggestions: [], src: 'local', ...o });
   const END = '\n\n(ده إرشاد بس، والدكتور أو الصيدلي هو اللي يأكد.)';
-  if (hasAny(T, RED) || chestPain(T)) return mk('الأعراض دي ممكن تكون خطيرة، ومينفعش أنصح بدواء من غير كشف. اتصل بالإسعاف 123 أو روح أقرب طوارئ دلوقتي.' + END, { urgent: true });
-  const fever = hasAny(T, ['سخونيه', 'سخونه', 'حراره', 'حرارتي', 'حمي']);
+  if (hasAny(T, RED)) return mk('الأعراض دي ممكن تكون خطيرة، ومينفعش أنصح بدواء من غير كشف. اتصل بالإسعاف 123 أو روح أقرب طوارئ دلوقتي.' + END, { urgent: true });
+  const fever = hasAny(T, ['سخونيه', 'سخونه', 'حراره', 'حمي']);
   let days = /اسبوع|اسبوعين|اسابيع/.test(T) ? 7 : /يومين/.test(T) ? 2 : 0;
   for (const m of T.matchAll(/(\d+|تلات|ثلاثه|ثلاث|اربعه|اربع|خمسه|خمس|سته|ست)\s*(ايام|يوم)/g)) days = Math.max(days, +m[1] || NUMW[m[1]] || 0);
   const child = hasWord(T, ['طفل', 'طفلي', 'طفله', 'بيبي', 'رضيع', 'ابني', 'بنتي', 'ابنتي', 'ولدي', 'عيل', 'الطفل']), preg = hasWord(T, ['حامل', 'حمل', 'مرضع', 'ارضع', 'رضاعه']);
   if (child && fever && hasAny(T, ['رضيع', 'شهور', 'شهر', 'مولود'])) return mk('سخونية في رضيع صغير محتاجة كشف عند الدكتور فورًا. روح الطوارئ أو كلّم دكتور الأطفال دلوقتي.' + END, { urgent: true });
-  if (fever && (days >= 3 || highTemp(RAW))) return mk('السخونية العالية أو اللي بتستمر 3 أيام أو أكتر لازم تتكشف عند دكتور. متتأخرش.' + END, { urgent: true });
+  if (fever && (days >= 3 || /\b(39|40|41)\b/.test(T))) return mk('السخونية العالية أو اللي بتستمر 3 أيام أو أكتر لازم تتكشف عند دكتور. متتأخرش.' + END, { urgent: true });
   if (days >= 7) return mk('الأعراض اللي بقالها أسبوع أو أكتر لازم دكتور يشوفها. روح كشف.' + END, { urgent: true });
   if (child) return mk('جرعات أدوية الأطفال بتتحسب بالوزن والسن، ومينفعش أقترح دواء من غير دكتور أو صيدلي. كلّم دكتور الأطفال أو اسأل الصيدلي.' + END);
   if (preg) return mk('في الحمل والرضاعة مينفعش تاخد أي دواء من غير ما تسأل دكتورك، حتى الأدوية البسيطة.' + END);
@@ -495,11 +517,9 @@ async function chatAI(msgs, meds) {
 async function sendChat() {
   const inp = $('#cm'), t = inp ? inp.value.trim() : ''; if (!t || chatBusy) return;
   chat.push({ r: 'u', t: t.slice(0, 600) }); chatBusy = true; renderChat(true);
-  const meds = useMeds && me() ? normMeds(me().meds) : [], safe = localHelper(chat, meds), last = localHelper(chat.slice(-1), meds), prev = chat.length > 1 ? localHelper(chat.slice(0, -1), meds) : null;
+  const meds = useMeds && me() ? normMeds(me().meds) : [], safe = localHelper(chat, meds);
   let rep = null; why = '';
-  // علامات الخطر بتتعامل محليًا الأول: لو الرسالة الأخيرة فيها خطر، أو الخطر ظهر لأول مرة دلوقتي (بعدها الذكاء الاصطناعي بيكمّل وشايف التاريخ)
-  const hold = last.urgent || (safe.urgent && !(prev && prev.urgent));
-  if (!hold) { try { rep = await chatAI(chat, meds); } catch (e) { rep = null; why = e.message || String(e); } }
+  if (!safe.urgent) { try { rep = await chatAI(chat, meds); } catch (e) { rep = null; why = e.message || String(e); } } // علامات الخطر بتتعامل محليًا الأول
   if (!rep) rep = { ...safe, why };
   chat.push({ r: 'b', t: rep.reply, sug: rep.suggestions || [], urgent: !!rep.urgent, src: rep.src, why: rep.why });
   chatBusy = false; renderChat();
@@ -541,11 +561,15 @@ function pharm() {
   if (!p || editPh) { const x = p || {}; return `<div class="card"><h3>${p ? 'تعديل بيانات الصيدلية' : 'سجّل صيدليتك'}</h3>
   <input id="n" placeholder="اسم الصيدلية" value="${esc(x.name)}"><input id="ph" type="tel" placeholder="رقم الهاتف" value="${esc(x.phone)}"><input id="ad" placeholder="العنوان" value="${esc(x.addr)}">
   <div class="row"><input id="la" placeholder="خط العرض" value="${x.lat ?? loc[0]}"><input id="lo" placeholder="خط الطول" value="${x.lng ?? loc[1]}"><button class="sec" onclick="gps(1)">موقعي</button></div>
+  <label class="lbl">المحافظة<select id="gv">${REG.map(g => `<option value="${g[0]}" ${g[0] == (x.gov || govOf([x.lat ?? loc[0], x.lng ?? loc[1]])) ? 'selected' : ''}>${g[1]}</option>`).join('')}</select></label>
   <label><input type="checkbox" id="h24" ${x.h24 ? 'checked' : ''}>شغالة 24 ساعة</label>
   <div class="row"><input id="o" type="time" value="${x.o || '09:00'}"><input id="c" type="time" value="${x.c || '23:00'}"></div>
   <div class="row"><button onclick="reg()">${p ? 'حفظ' : 'تسجيل الصيدلية'}</button>${p ? '<button class="sec" onclick="editPh=false;render()">إلغاء</button>' : ''}</div></div>`; }
   const inv = S.inv.filter(i => i.p == p.id && drug(i.d)), rs = S.res.filter(r => r.p == p.id).sort((a,b) => b.at - a.at);
-  return `<div class="card row" style="justify-content:space-between"><div><b>${esc(p.name)}</b><br><small>${esc(p.addr)}</small></div><button class="sec" onclick="editPh=true;render()">✏️ تعديل</button></div>
+  const head = `<div class="card row" style="justify-content:space-between"><div><b>${esc(p.name)}</b><br><small>${esc(p.addr)} · ${esc(govName(phGov(p)))}</small></div><button class="sec" onclick="editPh=true;render()">✏️ تعديل</button></div>`;
+  const tabs = `<div class="row"><button class="${pv == 's' ? '' : 'sec'}" onclick="pv='s';render()">📦 مخزني وحجوزاتي</button><button class="${pv == 'd' ? '' : 'sec'}" onclick="pv='d';loadDemand()">📈 الأدوية المطلوبة في محافظتي</button></div>`;
+  if (pv == 'd') return head + tabs + demandView(p);
+  return head + tabs + `
   <div class="card"><h3>أضف أو حدّث دواء</h3>
   <div class="row"><input id="bc" placeholder="باركود الدواء (اختياري)" onchange="setBc(this.value)"><button class="sec" onclick="scan()">📷 صوّر</button></div>
   <div id="rd" style="width:100%" onclick="stopCam()"></div><div id="sm"></div>
@@ -562,8 +586,33 @@ function pharm() {
 }
 
 // ===== الأحداث =====
+let pv = 's', dw = 1, onlyMiss = true, dem = [];
+async function loadDemand() {
+  const p = S.ph.find(x => x.id == my); if (!p) return;
+  const gov = phGov(p), wks = []; for (let i = 0; i < (dw == 1 ? 1 : 4); i++) wks.push(wkKey(Date.now() - i * 7 * 86400000));
+  let rows = [];
+  try {
+    if (fs) { for (const w of wks) rows.push(...(await fs.getDocs(fs.query(fs.collection(fs.db, 'demand'), fs.where('gk', '==', gov + '|' + w)))).docs.map(d => d.data())); }
+    else rows = S.demand.filter(x => x.gov == gov && wks.includes(x.wk));
+  } catch (e) { console.warn('demand load', e); }
+  const m = new Map(); rows.forEach(r => { const o = m.get(r.d) || { d:r.d, n:0, miss:0 }; o.n += r.n; o.miss += r.miss; m.set(r.d, o); });
+  dem = [...m.values()].sort((a, b) => b.miss - a.miss || b.n - a.n);
+  if (dem.some(wid)) await loadWorld();
+  render();
+}
+const demandView = p => {
+  const gov = phGov(p), mine = new Set(S.inv.filter(i => i.p == p.id && i.q > 0).map(i => i.d)), rows = dem.filter(r => !onlyMiss || r.miss > 0).slice(0, 40);
+  return `<div class="card"><label>المحافظة<select onchange="setGov(this.value)">${REG.map(g => `<option value="${g[0]}" ${g[0] == gov ? 'selected' : ''}>${g[1]}</option>`).join('')}</select></label>
+  <small>بتتحدد تلقائي من موقع الصيدلية وتقدر تغيّرها. التحديد تقريبي.</small>
+  <div class="row" style="margin-top:6px"><button class="${dw == 1 ? '' : 'sec'}" onclick="dw=1;loadDemand()">الأسبوع ده</button><button class="${dw == 4 ? '' : 'sec'}" onclick="dw=4;loadDemand()">آخر 4 أسابيع</button></div>
+  <label><input type="checkbox" ${onlyMiss ? 'checked' : ''} onchange="onlyMiss=this.checked;render()">اللي مش متوفر في المحافظة بس</label></div>
+  <h3>الأدوية المطلوبة في ${esc(govName(gov))} (${rows.length})</h3>` +
+  (rows.map(r => `<div class="card"><b>${esc(dn(r.d))}</b><div class="meta"><span>اتبحث عنه: <b>${r.n}</b> مرة</span><span>مش متوفر: <b>${r.miss}</b> مرة</span></div>${mine.has(r.d) ? '<span class="tag">عندك منه ✓</span>' : `<button class="sec" style="margin-top:6px" onclick="quickAdd('${r.d}')">➕ ضيفه لمخزني</button>`}</div>`).join('') || '<p class="muted">مفيش بيانات لسه. بتظهر هنا لما عملاء في المحافظة يدوّروا على أدوية.</p>');
+};
+async function setGov(g) { const p = S.ph.find(x => x.id == my); if (!p) return; p.gov = g; await put('ph', p); loadDemand(); }
+const quickAdd = id => { pv = 's'; render(); pickD(id); const e = $('#qq'); if (e) e.focus(); };
 async function reg() {
-  const cur = S.ph.find(x => x.id == my), v = i => $('#'+i).value.trim(), o = { ...(cur ? { id:cur.id } : {}), ...(user ? { id:user.uid } : {}), name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), h24:$('#h24').checked, o:v('o'), c:v('c') };
+  const cur = S.ph.find(x => x.id == my), v = i => $('#'+i).value.trim(), o = { ...(cur ? { id:cur.id } : {}), ...(user ? { id:user.uid } : {}), name:v('n'), phone:v('ph'), addr:v('ad'), lat:parseFloat(v('la')), lng:parseFloat(v('lo')), h24:$('#h24').checked, o:v('o'), c:v('c'), gov:$('#gv').value };
   if (!o.name || !o.phone || isNaN(o.lat) || isNaN(o.lng)) return alert('كمّل الاسم والهاتف والموقع.');
   my = (await put('ph', o)).id; localStorage.setItem('dv_my', my); editPh = false; render();
 }
@@ -659,7 +708,7 @@ function gps(f) {
   if (!navigator.geolocation) return alert('المتصفح مش بيدعم تحديد الموقع.');
   navigator.geolocation.getCurrentPosition(p => {
     const a = p.coords.latitude, b = p.coords.longitude;
-    if (f) { $('#la').value = a; $('#lo').value = b; }
+    if (f) { $('#la').value = a; $('#lo').value = b; const g = $('#gv'); if (g) g.value = govOf([a, b]); }
     else { loc = [a, b]; localStorage.setItem('dv_loc', JSON.stringify(loc)); render(); }
   }, () => alert('مقدرتش أحدد موقعك. اسمح للمتصفح بالوصول للموقع.'));
 }
